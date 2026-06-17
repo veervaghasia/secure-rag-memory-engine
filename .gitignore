@@ -1,0 +1,17 @@
+# Python bytecode caches
+__pycache__/
+*.pyc
+
+# Local databases and vector stores
+*.db
+*.sqlite
+chroma_data/
+
+# Environment files holding API keys
+.env
+venv/
+.venv/
+
+# IDE specific files
+.vscode/
+.DS_Store
