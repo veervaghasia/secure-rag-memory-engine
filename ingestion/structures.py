@@ -35,6 +35,6 @@ class ProcessedChunk(BaseModel):
 class IngestionPayload(BaseModel): 
     """Container grouping all processed chunks of a page along with  telemetry."""
     source_page_id: str  # unique identifier of the source page
-    chunks: List[ProcessedChunk]  
+    chunks: List[ProcessedChunk]  # collection of chunks generated
     total_chunks: int  # number of chunks created from source page
-    parsing_latency_ms: float  # time taken to parse the page into chunks; helps to track parsing latency for Opik
+    parsing_latency_ms: float  # time taken to parse the page into chunks; logs directly to Opik
