@@ -2,22 +2,30 @@ import hashlib  # to import cryptographic fns to calculate the hash of a chunk
 import time  # to track latency of the ingestion process
 from typing import List  
 from ingestion.structures import RawOnenotePage, ProcessedChunk, IngestionPayload
+from config import config
+from opik import opik_context, track
 
 class FixedSizeChunker:
     """Splits a given text into fixed-size chunks of a specified size."""
     
-    def __init__(self, chunk_size: int = 100, chunk_overlap: int = 20):
+    def __init__(self, chunk_size: int = None, chunk_overlap: int = None):
         """Initialize the chunker with specific execution parameters."""
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
+        self.chunk_size = chunk_size or config.chunking.chunk_size
+        self.chunk_overlap = chunk_overlap or config.chunking.chunk_overlap
 
     def _generate_deterministic_hash(self, text: str) -> str:
         """Generates a stable SHA-256 hex string for deduplication."""
         # hashlib requires byte streams, so we encode the python string to utf-8 first
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
     
+    @track(project_name="secure-rag-memory-engine")
     def chunk_page(self, page: RawOnenotePage) -> IngestionPayload:
         """Slices a RawOnenotePage into fixed-character ProcessedChunks with metadata."""
+        # Update the current trace metadata cleanly using the context module
+        opik_context.update_current_trace(metadata={
+            "phase": config.telemetry.current_phase
+        })
+        
         start_time = time.time()  # STart the stopwatch for telemetry
 
         text = page.text_content

@@ -1,5 +1,11 @@
 from ingestion.structures import RawOnenotePage
 from ingestion.base_parser import FixedSizeChunker
+import opik
+from config import config
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def run_integration_test():
     print("=" * 60)
@@ -46,4 +52,13 @@ def run_integration_test():
         print("-" * 60)
 
 if __name__ == "__main__":
+    # initialize the tracking connection using values from our config file
+    if config.telemetry.enable_opik:
+        opik.configure(
+            api_key=os.getenv("OPIK_API_KEY"),
+            workspace=os.getenv("OPIK_WORKSPACE"),
+            force=True,
+            automatic_approvals=True
+        )
+    
     run_integration_test()

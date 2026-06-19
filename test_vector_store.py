@@ -3,6 +3,8 @@ from dotenv import load_dotenv
 from ingestion.structures import RawOnenotePage
 from ingestion.base_parser import FixedSizeChunker
 from retrieval.vector_store import ChromaVectorEngine
+from config import config
+import opik
 
 # Automatically find and load the .env file into the system memory
 load_dotenv()
@@ -87,5 +89,13 @@ def run_retrieval_test():
         print("=" * 60)
 
 if __name__ == "__main__":
+    if config.telemetry.enable_opik:
+        opik.configure(
+            api_key=os.getenv("OPIK_API_KEY"),
+            workspace=os.getenv("OPIK_WORKSPACE"),
+            force=True,
+            automatic_approvals=True
+        )
+
     run_retrieval_test() 
 
