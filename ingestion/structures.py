@@ -13,6 +13,7 @@ class RawOnenotePage(BaseModel):
     section_name: str
     page_title: str
     text_content: str
+    page_hash: str
     depth: int = 0  # 0 = main page, 1 = subpage, etc.
     parent_page_id: Optional[str] = None  # Tracks hierarchy for sub-pages
 
