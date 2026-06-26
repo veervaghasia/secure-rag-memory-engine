@@ -15,3 +15,7 @@ venv/
 # IDE specific files
 .vscode/
 .DS_Store
+
+# Exclude raw data ingestion pipelines
+data/onenote_exports/
+data/ingestion_manifest.json

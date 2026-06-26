@@ -26,7 +26,7 @@ class FixedSizeChunker:
             "phase": config.telemetry.current_phase
         })
         
-        start_time = time.time()  # STart the stopwatch for telemetry
+        start_time = time.time()  # Start the stopwatch for telemetry
 
         text = page.text_content
         chunks_list: List[ProcessedChunk] = []
