@@ -1,31 +1,59 @@
-SAMPLE CURRENT STATE
----
-Current Phase 
-
+Current Phase:
 Phase 1
 
-Current Pillar
-
+---
+Current Pillar:
 Retrieval
 
-Current Branch
+---
+Current Branch:
+`feature/phase1-bm25`
 
-feature/rrf
+---
+Current Goal:
+Implement lexical retrieval.
 
-Current Task
+---
+Completed:
+Ingestion
+* Document Parser 
+* Document Sanitization
+* Chunk Generation using Fixed Size Chunker
 
-Implement Reciprocal Rank Fusion
+Chromma Vector Engine
+* Chunk Embedding 
+* Upsert Chunks in chromadb
+* Search Similar Chunks using chromadb
 
-Completed
+---
+Data Models used: 
+* class RawOnenotePage(BaseModel):
+page_id: str 
+notebook_name: str
+section_name: str
+page_title: str
+text_content: str
+page_hash: str
+depth: int = 0  # 0 = main page, 1 = subpage, etc.
+parent_page_id: Optional[str] = None  # Tracks hierarchy for sub-pages
 
-Vector Retriever
+class ProcessedChunk(BaseModel):
+chunk_id: str 
+parent_page_id: str
+text_content: str
+chunk_index: int
+notebook_name: str
+section_name: str
+parent_page_title: str
+content_hash: str  
 
-BM25 Retriever
+class IngestionPayload(BaseModel): 
+source_page_id: str
+chunks: List[ProcessedChunk]
+total_chunks: int
+parsing_latency_ms: float
 
-Blocked By
-
-None
-
+---
 Definition of Done
-
-Top-K fusion working
+* BM25 created
+* search similar chunks using bm25

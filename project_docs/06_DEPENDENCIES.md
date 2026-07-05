@@ -84,6 +84,9 @@ Chunk Generation
 ProcessedChunk
         ↓
 Vector Store
+        |
+        |
+BM25 Index
 ```
 
 ---
@@ -94,6 +97,12 @@ Vector Store
 Vector Store
         ↓
 Vector Search
+```
+
+```text
+BM25 Index
+        ↓
+Keyword Search
 ```
 
 ---
