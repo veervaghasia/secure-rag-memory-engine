@@ -125,7 +125,7 @@ Persistent storage is unnecessary during early development.
 
 **Future Evaluation**
 
-Persistent Chroma may be introduced when repeated ingestion becomes expensive.
+Persistent Chroma and BM25 may be introduced when repeated ingestion becomes expensive.
 
 ---
 

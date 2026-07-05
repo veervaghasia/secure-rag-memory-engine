@@ -19,3 +19,6 @@ venv/
 # Exclude raw data ingestion pipelines
 data/onenote_exports/
 data/ingestion_manifest.json
+
+# Exclude temp md files used for AI sessions
+upload_docs/
