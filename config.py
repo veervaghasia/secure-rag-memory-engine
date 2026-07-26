@@ -13,6 +13,24 @@ class VectorStoreConfig(BaseModel):
     collection_name: str = "retrieval_baseline"
     embedding_model: str = "text-embedding-3-small"
 
+class RetrievalConfig(BaseModel):
+    """
+    Configuration governing hybrid retrieval execution and strategy toggles.
+    Enables single-flag toggles for ablation studies.
+    """
+    top_k: int = 5
+    use_vector: bool = True
+    use_bm25: bool = True
+    fusion_strategy: str = "concat"  # Phase 1: "concat" | Phase 2: "rrf"
+
+class LLMConfig(BaseModel):
+    """
+    Configuration for LiteLLM generation parameters.
+    """
+    model_name: str = "gpt-4o-mini"
+    temperature: float = 0.0
+    # max_tokens: int = 1000
+
 class TelemetryConfig(BaseModel):
     enable_opik: bool = True
     project_name: str = "secure-rag-memory-engine"  # Unified root project
@@ -42,6 +60,8 @@ class TelemetryConfig(BaseModel):
 class AppConfig(BaseModel):
     chunking: ChunkingConfig = ChunkingConfig()
     vector_store: VectorStoreConfig = VectorStoreConfig()
+    retrieval: RetrievalConfig = RetrievalConfig()
+    llm: LLMConfig = LLMConfig()
     telemetry: TelemetryConfig = TelemetryConfig()
 
 # Single Source of Truth instantiated instance (The Singleton)

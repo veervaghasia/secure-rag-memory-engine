@@ -28,6 +28,8 @@ class ChromaVectorEngine:
         # Create or fetch our target storage collection
         self.collection = self.client.get_or_create_collection(name=self.collection_name)
 
+    # This is one of the only private functions we have kept opik.track.
+    # Reason being that we are calling litellm here. 
     @track(project_name="secure-rag-memory-engine")
     def _compute_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
         """Invokes LiteLLM to convert a batch of strings into fixed-dimension vectors."""
@@ -46,7 +48,7 @@ class ChromaVectorEngine:
     
     # @opik.track(tags=[config.telemetry.current_phase]) 
     # Potential runtime boot order issue
-    @track(project_name="secure-rag-memory-engine")
+    @track(project_name="secure-rag-memory-engine", name="vector_store_upsert")
     def upsert_chunks(self, chunks: List[ProcessedChunk]) -> int:
         """Transforms ProcessedChunks into vectors and securely upserts them into ChromaDB."""
         # Update the current trace metadata cleanly using the context module
@@ -84,7 +86,7 @@ class ChromaVectorEngine:
         computed_vectors = self._compute_embeddings_batch(chunk_texts)
 
         # Write into the vector storage layer
-        self.collection.add(
+        self.collection.upsert(
             ids=chunk_ids,
             embeddings=computed_vectors,
             documents=chunk_texts,
@@ -93,12 +95,16 @@ class ChromaVectorEngine:
 
         return len(chunk_ids)
     
-    @track(project_name="secure-rag-memory-engine")
-    def search_similar_chunks(self, query_text: str, top_k: int = 3, filter_dict: dict = None) -> dict:
+    @track(project_name="secure-rag-memory-engine", name="vector_search_similar_chunks")
+    def search_similar_chunks(self, query_text: str, top_k: int = config.retrieval.top_k, filter_dict: dict = None) -> dict:
         """Embeds a raw query string and fetches the top_k most similar matching document chunks."""
         # Update the current trace metadata cleanly using the context module
         opik_context.update_current_trace(metadata={
-            "phase": config.telemetry.current_phase
+            "phase": config.telemetry.current_phase,
+            "query": query_text,
+            "top_k": top_k,
+            "has_filter": filter_dict is not None,
+            "engine_type": "vector"
         })
         
         # Check the incoming query is not an empty string
