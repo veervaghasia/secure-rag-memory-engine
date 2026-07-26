@@ -35,7 +35,8 @@ def run_retrieval_test():
             "Formula: Attention(Q,K,V) = softmax(QK^T / sqrt(d_k))V\n"
             "Todo Idea: Implement a clean multi-head attention block from scratch in PyTorch tomorrow."
         ),
-        depth=0
+        depth=0, 
+        page_hash="mock_hash_123"
     )
 
     chunker = FixedSizeChunker(chunk_size = 100, chunk_overlap = 20)
@@ -72,7 +73,7 @@ def run_retrieval_test():
         search_results = engine.search_similar_chunks(query_text=user_query, top_k=2)
 
         # Parse and display what Chroma returned
-        print("\nTop Search Results Returned by ChrmaDB:")
+        print("\nTop Search Results Returned by ChromaDB:")
         for idx, (doc, score, meta) in enumerate(zip(
             search_results['documents'][0], 
             search_results['distances'][0], 

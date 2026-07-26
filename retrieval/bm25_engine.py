@@ -30,7 +30,7 @@ class BM25Engine:
         cleaned = lowered.translate(str.maketrans("", "", string.punctuation.replace("_", "")))
         return cleaned.split()
     
-    @opik.track(project_name="secure-rag-memory-engine")
+    @opik.track(project_name="secure-rag-memory-engine", name="bm25_search_similar_chunks")
     def upsert_chunks(self, chunks: List[ProcessedChunk]) -> int:
         """
         Deduplicates chunks via unique hash IDs, caches them in memory, 
@@ -71,9 +71,9 @@ class BM25Engine:
 
         return len(chunks)
     
-    @opik.track(project_name="secure-rag-memory-engine")
+    @opik.track(project_name="secure-rag-memory-engine", name="bm25_search_similar_chunks")
     def search_similar_chunks(
-            self, query_text: str, top_k: int, filter_dict: Optional[Dict[str, Any]] = None
+            self, query_text: str, top_k: int = config.retrieval.top_k, filter_dict: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Enforces workspace filtering constraints before calculation, computes BM25

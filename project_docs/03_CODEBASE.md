@@ -35,6 +35,15 @@
 - `class ProcessedChunk` -> *"Represents a single text slice, complete with the redundant metadata fields we need for ChromaDB filtering."*
 - `class IngestionPayload` -> *"Container grouping all processed chunks of a page along with  telemetry."*
 
+#### File: `./retrieval/bm25_engine.py`
+- `class BM25Engine` -> *"Stateful lexical retrieval engine implementing the BM25Okapi algorithm."*
+  - `_tokenize(text)`
+      - *"Cleans and splits text into explicit lowercase word tokens."*
+  - `upsert_chunks(chunks)`
+      - *"Deduplicates chunks via unique hash IDs, caches them in memory, "*
+  - `search_similar_chunks(query_text, top_k, filter_dict)`
+      - *"Enforces workspace filtering constraints before calculation, computes BM25"*
+
 #### File: `./retrieval/vector_store.py`
 - `class ChromaVectorEngine`
   - `_compute_embeddings_batch(texts)`
