@@ -2,6 +2,8 @@
 #### File: `./config.py`
 - `class ChunkingConfig`
 - `class VectorStoreConfig`
+- `class RetrievalConfig` -> *"Configuration governing hybrid retrieval execution and strategy toggles."*
+- `class LLMConfig` -> *"Configuration for LiteLLM generation parameters."*
 - `class TelemetryConfig`
   - `verify_telemetry_environment()`
 - `class AppConfig`
@@ -43,6 +45,20 @@
       - *"Deduplicates chunks via unique hash IDs, caches them in memory, "*
   - `search_similar_chunks(query_text, top_k, filter_dict)`
       - *"Enforces workspace filtering constraints before calculation, computes BM25"*
+
+#### File: `./retrieval/orchestrator.py`
+- `def format_chunk_for_context(chunk)`
+   - *"Formats a single ProcessedChunk into a human-readable, token-efficient context string"*
+- `def build_prompt_messages(user_query, retrieved_chunks, system_prompt)`
+   - *"Assembles standard OpenAI/LiteLLM role-based message list."*
+- `def run_rag_pipeline(user_query, vector_engine, bm25_engine, filter_dict, top_k, model)`
+   - *"Executes the Phase 1 User Query Lifecycle:"*
+
+#### File: `./retrieval/search_fusion.py`
+- `def parse_retrieval_results_to_chunks(results)`
+   - *"Parses standardized retrieval dictionary output (Chroma/BM25)"*
+- `def fuse_results(vector_results, bm25_results, top_k)`
+   - *"Fuses results from vector and BM25 retrievers."*
 
 #### File: `./retrieval/vector_store.py`
 - `class ChromaVectorEngine`
