@@ -3,15 +3,17 @@ Phase 1
 
 ---
 # Current Pillar:
-Retrieval
+State & Session Management
 
 ---
 # Current Branch:
-feature/phase1-rag-engine
+### feature/phase1-session-memory
 
 ---
 ## Current Goal:
-Connect retrieval pipeline.
+SQLite logging.
+
+Conversation restoration.
 
 ---
 ## Completed:
@@ -28,6 +30,12 @@ Chromma Vector Engine
 BM25 Engine
 * Upsert chunks
 * Search similar chunks
+
+Search Fusion
+* Simple concatenation of results from vector and bm25 search
+
+Retrieval Pipeline Orchestration
+* Connect components to form retrieval pipeline.
 
 ---
 ## Data Models used: 
@@ -59,18 +67,19 @@ class IngestionPayload(BaseModel):
 
 ---
 ## Definition of Done
-- simple hybrid retrieval
-- Vector and BM25 results are concatenated without ranking
-- context assembly
-- LLM generation
+
+- SQLite persistence
+- ChatMessage
+- session restoration
+- get_conversation_context()
 
 ---
 ## Explicitly Out of Scope
-- routing
-- reranking
-- query rewriting
-- self-correction
-- agent loops
+
+- semantic conversation retrieval
+- profile memory
+- fact invalidation
+- Redis cache
 
 ---
 # Global Dependency Hierarchy
@@ -211,3 +220,20 @@ LiteLLM
       ▼
 Assistant Response
 ```
+
+## Conversation Persistence
+
+```
+User Message
+      │
+      ▼
+SQLite
+      │
+      ▼
+ChatMessage
+      │
+      ▼
+Commit
+```
+
+Assistant responses follow the same path.

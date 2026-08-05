@@ -1,16 +1,40 @@
 import os
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from dotenv import load_dotenv
 
 # Ensure env variables from .env are loaded into the process runtime
 load_dotenv()
 
+class MemoryConfig(BaseModel):
+    """
+    Configuration settings for memory management and persistence.
+    """
+    database_path: str = Field(
+        default="data/conversations.db",
+        description="Local disk path for SQLite state database."
+    )
+    default_session_id: str = Field(
+        default="default_session",
+        description="Fallback session ID for single-user testing/Phase 1."
+    )
+    history_limit: int = Field(
+        default=10,
+        description="Number of past messages (k) retrieved during get_conversation_context()."
+    )
+
 class ChunkingConfig(BaseModel):
-    chunk_size: int = 120
-    chunk_overlap: int = 30
+    chunk_size: int = Field(
+        default=120,
+        description="Size of each text chunk."
+    )
+    chunk_overlap: int = Field(
+        default=30,
+        description="Overlap between consecutive text chunks."
+    )
 
 class VectorStoreConfig(BaseModel):
-    collection_name: str = "retrieval_baseline"
+    collection_name: str = "onenote_knowledge_base"
+    persist_directory: str = "data/chroma_db"
     embedding_model: str = "text-embedding-3-small"
 
 class RetrievalConfig(BaseModel):
@@ -63,6 +87,7 @@ class AppConfig(BaseModel):
     retrieval: RetrievalConfig = RetrievalConfig()
     llm: LLMConfig = LLMConfig()
     telemetry: TelemetryConfig = TelemetryConfig()
+    memory: MemoryConfig = MemoryConfig()
 
 # Single Source of Truth instantiated instance (The Singleton)
 config = AppConfig()
