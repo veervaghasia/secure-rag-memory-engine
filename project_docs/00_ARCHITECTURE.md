@@ -2,21 +2,23 @@
 
 # Secure RAG Memory Engine — System Architecture
 
-This document defines the long-term architecture of the Secure RAG Memory Engine.
+This document defines the target architecture of the Secure RAG Memory Engine.
 
-Unlike the roadmap, this document is intended to remain relatively stable throughout development. It describes the guiding principles, system responsibilities, and architectural boundaries rather than implementation status.
+It describes the long-term responsibilities, capabilities, interfaces, and boundaries of the system. Capabilities listed here represent the intended architecture and may be introduced progressively across development phases.
+
+The roadmap defines when those capabilities are implemented, while the ADR documents explain the architectural decisions behind them.
 
 ---
 
-# Architectural Manifestos
+# Architectural Principles
 
 ## 1. Zero Framework Abstractions
 
-High-level orchestration frameworks (LangChain, LlamaIndex, etc.) must not implement business logic.
+High-level orchestration frameworks such as LangChain and LlamaIndex must not own core business logic.
 
-All ingestion, retrieval, routing, fusion, memory, and agentic workflows are implemented directly in Python.
+Core ingestion, retrieval, routing, fusion, memory, and agentic workflows are implemented directly in Python.
 
-Frameworks may only be used as infrastructure libraries.
+Focused infrastructure libraries may be used where they provide supporting capabilities without owning application logic.
 
 Examples include:
 
@@ -25,6 +27,7 @@ Examples include:
 * Redis
 * Opik
 * Ragas
+* Tenacity
 
 ---
 
@@ -66,10 +69,10 @@ Implementations may evolve between phases without changing callers.
 
 Examples include:
 
-* recent history → semantic retrieval
+* recent-history retrieval → semantic/hybrid conversation retrieval
 * vector retrieval → hybrid retrieval
-* simple retrieval → routed retrieval
-* linear execution → agentic execution
+* one retrieval strategy → routed retrieval
+* sequential orchestration → agentic orchestration
 
 ---
 
@@ -81,14 +84,13 @@ The application is configured through a centralized Configuration System (`confi
 
 Responsibilities include:
 
-* chunking parameters
+* experiment configuration
+* ingestion and chunking parameters
 * retrieval configuration
 * embedding model selection
-* cache configuration
-* memory configuration
-* telemetry
-* runtime behavior
-* feature toggles
+* memory and cache configuration
+* telemetry configuration
+* runtime behavior and feature toggles
 * evaluation settings
 
 Business logic must consume configuration values instead of hardcoded constants.
@@ -118,11 +120,66 @@ Assemble Application Services
 Start Runtime
 ```
 
-Infrastructure is initialized once and reused throughout the application's lifetime.
+Infrastructure is initialized once for each application runtime and reused throughout that runtime.
+
+Ingestion is intentionally a separate application lifecycle from interactive querying. Persistent retrieval state allows ingestion to complete before the query or evaluation lifecycle begins.
+
+---
+
+## Application Boundary
+
+The application layer provides runtime entry points without owning domain state or retrieval logic.
+
+The system contains two primary runtime workflows:
+
+### Ingestion Runtime
+
+```text
+ingest.py
+    ↓
+Document Parsing
+    ↓
+Chunking
+    ↓
+Enrichment
+    ↓
+Embedding
+    ↓
+Persistent Retrieval Stores
+```
+
+### Interactive Query Runtime
+
+```text
+main.py
+    ↓
+CLI Interaction
+    ↓
+Session Resolution
+    ↓
+RAG Orchestrator
+    ↓
+Persistent Retrieval Stores
+```
+
+The two workflows share persistent infrastructure but have different responsibilities.
+
+`ingest.py` prepares retrieval state.
+
+`main.py` consumes persistent retrieval state and manages the interactive application flow.
 
 ---
 
 # The Four Architectural Pillars
+
+| Pillar | Owns |
+|---|---|
+| Pillar 1 — Secure Data Ingestion Pipeline | Document acquisition, transformation, enrichment, embedding preparation, ingestion state, and retrieval-state preparation |
+| Pillar 2 — Agentic RAG Orchestrator | Query understanding, retrieval orchestration, generation, validation, routing, and agent execution |
+| Pillar 3 — State & Session Management | Conversation state, session identity, memory, and stateful caching |
+| Pillar 4 — LLMOps | Model operations, telemetry, evaluation, benchmarking, and operational analytics |
+
+---
 
 ## Pillar 1 — Secure Data Ingestion Pipeline
 
@@ -149,8 +206,9 @@ Responsibilities include:
 ### Storage Preparation
 - immutable document models
 - chunk-level metadata generation
-- pre-embedding deduplication
-- future chunk-level deduplication
+- deterministic identifiers
+- content identity
+- chunk-level deduplication
 - retrieval-time metadata authorization
 - document access filtering
 
@@ -188,7 +246,7 @@ Responsibilities include:
 - reranking
 - metadata security filtering
 - hybrid retrieval
-- conversation-context assembly via `get_conversation_context()`
+- consuming conversation context through `get_conversation_context()`
 
 ### Agent Execution
 - routing
@@ -224,6 +282,10 @@ Responsibilities include:
 - semantic chat memory
 - shared session vector collection
 
+### Session Identity
+
+The application exposes human-readable session_name values, while persistent storage uses immutable session_id values. StateManager owns the mapping between them. Session metadata is stored separately from message records so renaming a session does not alter message relationships.
+
 ### Long-Term Memory
 - profile memory
 - background profile extraction
@@ -240,6 +302,8 @@ Responsibilities include:
 - cache invalidation
 - cache consistency
 - cache lifecycle management
+
+Caching is introduced progressively; Redis-backed semantic caching is a later-phase capability.
 
 ### State Evolution
 - conversation summarization
@@ -271,9 +335,9 @@ Responsibilities include:
 ### Observability
 - telemetry
 - tracing
-- observability
-- routing decisions
-- validator outcomes
+- runtime trace metadata
+- phase and experiment trace scoping
+- routing and validation outcomes
 - mutation events
 
 ### Evaluation
@@ -288,53 +352,117 @@ Responsibilities include:
 - token cost monitoring
 - performance dashboards
 - experiment tracking
-- production readiness assessment
 - operational reporting
 
 No business logic should reside in this pillar.
 
 This pillar provides the evidence used to validate architectural decisions, measure system quality, and compare implementations across phases.
 
+### Telemetry Boundary
+
+Application components do not configure or depend directly on the telemetry backend.
+
+The application interacts with a backend-neutral telemetry interface exposed through `telemetry/`. The current implementation uses Opik as the telemetry backend.
+
+The boundary is:
+
+```text
+Application Components
+        ↓
+    telemetry/
+        ↓
+       Opik
+```
+
+The telemetry layer is responsible for:
+
+* backend configuration
+* availability detection
+* function and span tracking
+* runtime trace metadata
+* correlation of model-provider operations with application traces
+
+The application remains operational when telemetry is unavailable; telemetry is observability rather than a functional dependency of the RAG pipeline.
+
+Retrieval state is physically isolated by experiment, while telemetry is logically scoped through `experiment_id` and `phase` metadata.
+
 ---
 
 # High-Level Runtime
 
 ```
-User Query
-        │
-        ▼
-Configuration
-        │
-        ▼
-Memory Layer
-        │
-        ▼
-Retriever
-        │
-        ▼
-Context Assembly
-        │
-        ▼
-LLM
-        │
-        ▼
-Validator
-        │
-        ▼
-Response
+                    ┌──────────────────┐
+                    │ Ingestion Runtime│
+                    │    ingest.py     │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                  ┌──────────────────────┐
+                  │ Experiment-Isolated  │
+                  │ Retrieval State      │
+                  ├──────────────────────┤
+                  │ Chroma               │
+                  │ BM25                 │
+                  │ Ingestion Manifest   │
+                  └──────────┬───────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │ Interactive Query│
+                    │    main.py       │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │ Session / State  │
+                    │   Management     │
+                    │    SQLite        │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │ RAG Orchestrator │
+                    └───────┬──────────┘
+                            │
+                    ┌───────┴────────┐
+                    ▼                ▼
+                Retrieval    Conversation State
+                    │                │
+                    └───────┬────────┘
+                            ▼
+                           LLM
+                            │
+                            ▼
+                          Response
 ```
 
-The internal implementations evolve across phases while preserving the overall control flow.
+The ingestion and query runtimes are separated by persistent retrieval state.
+
+Session state is independent of experiment state:
+
+- `session_id` represents conversational state.
+- `experiment_id` represents retrieval and application configuration.
+
+They must not be conflated.
 
 ---
 
 # Guiding Principle
 
-Every phase should improve one of four properties without unnecessarily compromising the others:
+# Guiding Principle
+
+Every phase should improve the system without unnecessarily compromising:
 
 * correctness
 * retrieval quality
 * latency
 * maintainability
 
-Trade-offs should always be intentional and measurable.
+Changes should be evaluated using measurable system metrics where applicable, particularly:
+
+* Context Precision
+* Context Recall
+* Faithfulness
+* Latency
+
+Architectural trade-offs should be intentional, documented, and measurable where practical.

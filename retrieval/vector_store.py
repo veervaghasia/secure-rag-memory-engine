@@ -1,60 +1,96 @@
-from typing import List
+from typing import List, Optional
+from config import config 
 import chromadb
 import litellm
 from litellm import embedding
-from litellm.integrations.opik.opik import OpikLogger
 from ingestion.structures import ProcessedChunk
-from config import config 
-from opik import opik_context, track
-from opik.opik_context import get_current_span_data 
-
-# Initialize the dedicated logger and pass it to LiteLLM's callback collection
-opik_logger = OpikLogger()
-litellm.callbacks = [opik_logger]
+from telemetry import track, update_current_span, get_litellm_metadata
 
 class ChromaVectorEngine:
     def __init__(self):
-        """Initialize an ephemeral, high-speed in-memory ChromaDB client"""
-        # Ephemeral means that the data will not persist after the program ends
-        # Using EphemeralCLient ensures no database state files are written to disk during testing
-        self.client = chromadb.EphemeralClient()
+        """Initialize an persistent ChromaDB client pointing at local storage."""
+        # Switched from EphemeralClient to PersistentClient
+        self.client = chromadb.PersistentClient(path=config.vector_store.persist_directory)
 
         # We specify our embedding model standard for Phase 1 by dynamically pulling it form Pydantic AppConfig instance
         self.embedding_model = config.vector_store.embedding_model
 
-        # We specify the collection name by allso pulling it from AppConfig
+        # We specify the collection name by also pulling it from AppConfig
         self.collection_name = config.vector_store.collection_name
 
         # Create or fetch our target storage collection
         self.collection = self.client.get_or_create_collection(name=self.collection_name)
 
-    # This is one of the only private functions we have kept opik.track.
-    # Reason being that we are calling litellm here. 
-    @track(project_name="secure-rag-memory-engine")
+    def reset_store(self) -> None:
+        """
+        Deletes the underlying Chroma collection from disk and
+        re-instantiates an empty collection.
+        """
+        try:
+            self.client.delete_collection(name=self.collection_name)
+            print(f"🗑️ [VectorEngine] Successfully deleted Chroma collection '{self.collection_name}'.")
+        except Exception as e:
+            print(f"⚠️ [VectorEngine] Note during collection reset for '{self.collection_name}': {e}")
+
+        # Re-create empty collection handle
+        self.collection = self.client.get_or_create_collection(name=self.collection_name)
+        print(f"✅ [VectorEngine] Re-initialized empty collection '{self.collection_name}'.")
+
+    @track(name="_compute_embeddings_batch", capture_input=False, capture_output=False)
     def _compute_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
-        """Invokes LiteLLM to convert a batch of strings into fixed-dimension vectors."""
-        # LiteLLM normalizes different API payloads into a isngle standard call format
-        response = embedding(
-            model=self.embedding_model,
-            input=texts,
-            metadata={
-                "opik": {
-                    "current_span_data": get_current_span_data()
-                }
+        """
+        Invokes LiteLLM to convert strings into fixed-dimension vectors in chunks
+        defined by config.vector_store.embedding_batch_size to satisfy API token limits.
+        """
+        # Attach high-level metadata to the root trace
+        update_current_span(
+            {
+                "embedding_model": config.vector_store.embedding_model,
+                "batch_size": config.vector_store.embedding_batch_size,
             }
         )
+        
+        if not texts:
+            return []
+
+        batch_size= config.vector_store.embedding_batch_size
+        all_embeddings: List[List[float]] = []
+
+        # Iterate over text list in slices of `batch_size`
+        for i in range(0, len(texts), batch_size):
+            text_batch = texts[i : i + batch_size]
+
+            # LiteLLM normalizes different API payloads into a isngle standard call format
+            llm_kwargs = {
+                "model": config.vector_store.embedding_model,
+                "input": text_batch,
+            }
+
+            llm_kwargs.update(
+                get_litellm_metadata()
+            )
+
+            response = litellm.embedding(**llm_kwargs)
+
+            # Extract embedings for the current batch and extend output list
+            batch_vectors = [item["embedding"] for item in response["data"]]
+            all_embeddings.extend(batch_vectors)
+
         # Extract the raw float arrays from the standardized response payload
-        return [item["embedding"] for item in response["data"]]
+        return all_embeddings
     
-    # @opik.track(tags=[config.telemetry.current_phase]) 
     # Potential runtime boot order issue
-    @track(project_name="secure-rag-memory-engine", name="vector_store_upsert")
+    @track(name="vector_upsert_chunks", capture_input=False)
     def upsert_chunks(self, chunks: List[ProcessedChunk]) -> int:
         """Transforms ProcessedChunks into vectors and securely upserts them into ChromaDB."""
-        # Update the current trace metadata cleanly using the context module
-        opik_context.update_current_trace(metadata={
-            "phase": config.telemetry.current_phase
-        })
+        # Attach high-level metadata to the root trace
+        update_current_span(
+            {
+                "engine": "ChromaVectorEngine",
+                "collection": config.vector_store.collection_name,
+                "chunk_count": len(chunks),
+            }
+        )
         
         if not chunks or len(chunks) == 0:
             print("[VectorEngine] Upsert aborted: The provided chunk list is completely empty.")
@@ -82,35 +118,46 @@ class ChromaVectorEngine:
         ]
 
         # Compute the uniform numerical representations
-        print(f"Requesting vectors from LiteLLM ({self.embedding_model}) for {len(chunk_texts)} inputs...")
+        print(f"🔢 [VectorEngine] Requesting vectors from LiteLLM ({self.embedding_model}) for {len(chunk_texts)} inputs...")
         computed_vectors = self._compute_embeddings_batch(chunk_texts)
 
-        # Write into the vector storage layer
-        self.collection.upsert(
-            ids=chunk_ids,
-            embeddings=computed_vectors,
-            documents=chunk_texts,
-            metadatas=chunk_metadatas
-        )
+        # Chroma has its own maximum batch size, which is independent
+        # of the embedding API batch size.
+        upsert_batch_size = config.vector_store.chroma_upsert_batch_size
+
+        for start in range(0, len(chunk_ids), upsert_batch_size):
+            end = start + upsert_batch_size
+
+            # Write into the vector storage layer
+            self.collection.upsert(
+                ids=chunk_ids[start:end],
+                embeddings=computed_vectors[start:end],
+                documents=chunk_texts[start:end],
+                metadatas=chunk_metadatas[start:end],
+            )
 
         return len(chunk_ids)
-    
-    @track(project_name="secure-rag-memory-engine", name="vector_search_similar_chunks")
-    def search_similar_chunks(self, query_text: str, top_k: int = config.retrieval.top_k, filter_dict: dict = None) -> dict:
+
+    @track(name="vector_search_similar_chunks")
+    def search_similar_chunks(self, query_text: str, top_k: Optional[int] = None, filter_dict: dict = None) -> dict:
         """Embeds a raw query string and fetches the top_k most similar matching document chunks."""
-        # Update the current trace metadata cleanly using the context module
-        opik_context.update_current_trace(metadata={
-            "phase": config.telemetry.current_phase,
-            "query": query_text,
-            "top_k": top_k,
-            "has_filter": filter_dict is not None,
-            "engine_type": "vector"
-        })
+        # Attach high-level metadata to the root trace
+        update_current_span(
+            {
+                "engine": "ChromaVectorEngine",
+                "collection": config.vector_store.collection_name,
+                "embedding_model": config.vector_store.embedding_model,
+                "top_k": top_k,
+                "has_filter": filter_dict is not None
+            }
+        )        
+
+        top_k = top_k or config.retrieval.top_k
         
         # Check the incoming query is not an empty string
         if not query_text.strip():
             print("⚠️ [VectorEngine] Search aborted: The provided query text is empty.")
-            return {"ids": [], "documents": [], "metadatas": [], "distances": []}
+            return {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]}
 
         # Transform the user's plain text query into the exact same vector space
         print(f"Generating vector embedding for query: '{query_text}'...")

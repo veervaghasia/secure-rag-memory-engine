@@ -1,10 +1,11 @@
+import os
+import pickle
 import string
 from typing import List, Dict, Any, Optional
+from config import config
 from rank_bm25 import BM25Okapi
 from ingestion.structures import ProcessedChunk
-from config import config
-import opik
-from opik import opik_context
+from telemetry import track, update_current_span
 
 class BM25Engine:
     """
@@ -12,13 +13,80 @@ class BM25Engine:
     Provides exact keyword tracking over ProcessedChunks.
     """
     def __init__(self):
-        """Initialize the BM25Okapi engine with an empty corpus."""
+        """Initialize the BM25Okapi engine and hydrate state if index exists."""
         # Master record holding our data chunks indexed cleanly by unique chunk_id
         self.chunks_dict: Dict[str, ProcessedChunk] = {}
         # Parallel list maintaining structural sequence mapping to chunk keys
         self.corpus_ids: List[str] = []
         # Underlying matehmatical index initialized on state hydrate / upsert
         self.bm25: Optional[BM25Okapi] = None  
+
+        # Load state automatically upon initialization
+        self._load_index()
+
+    def _load_index(self) -> None:
+        """
+        Hydrates BM25 state from disk if index file exists and is valid.
+        """
+        index_path = config.bm25.index_path
+
+        if not os.path.exists(index_path):
+            print(f"ℹ️ [BM25Engine] No existing index found at '{index_path}'. Starting with empty state.")
+            return
+
+        try:
+            with open(index_path, "rb") as f:
+                data = pickle.load(f)
+                self.chunks_dict = data.get("chunks_dict", {})
+                self.corpus_ids = data.get("corpus_ids", [])
+                self.bm25 = data.get("bm25", None)
+                print(f"✅ [BM25Engine] Hydrated persistent index with {len(self.corpus_ids)} chunks from '{index_path}'.")
+        except Exception as e:
+            print(f"⚠️ [BM25Engine] Index at '{index_path}' is invalid/corrupted ({e}). Starting empty.")
+            self.chunks_dict = {}
+            self.corpus_ids = []
+            self.bm25 = None
+
+    def _save_index(self) -> None:
+        """
+        Serializes in-memory dictionary and BM25 model arrays directly to disk.
+        """
+        index_path = config.bm25.index_path
+
+        # Ensures dictionary exists before saving (e.g. data/)
+        os.makedirs(os.path.dirname(index_path), exist_ok=True)
+
+        payload = {
+            "chunks_dict": self.chunks_dict,
+            "corpus_ids": self.corpus_ids,
+            "bm25": self.bm25
+        }
+
+        with open(index_path, "wb") as f:
+            pickle.dump(payload, f)
+
+        print(f"✅ [BM25Engine] Successfully persisted index ({len(self.corpus_ids)} total records) to '{index_path}'.")
+
+    def reset_index(self) -> None:
+        """
+        Clears in-memory data structures and removes the 
+        serialized pickle file from disk.
+        """
+        index_path = config.bm25.index_path
+        self.chunks_dict = {}
+        self.corpus_ids = []
+        self.bm25 = None
+
+        if os.path.exists(index_path):
+            try:
+                os.remove(index_path)
+                print(f"🗑️ [BM25Engine] Removed persistent index pickle file at '{index_path}'.")
+            except Exception as e:
+                print(f"⚠️ [BM25Engine] Failed to delete pickle file at '{index_path}': {e}")
+        else:
+            print(f"ℹ️ [BM25Engine] No index file found at '{index_path}' to delete.")
+
+        print("✅ [BM25Engine] Reset to clean empty state.")
 
     def _tokenize(self, text: str) -> List[str]:
         """
@@ -29,23 +97,24 @@ class BM25Engine:
         # Remove common syntax punctuation elements but keep word text symbols intact
         cleaned = lowered.translate(str.maketrans("", "", string.punctuation.replace("_", "")))
         return cleaned.split()
-    
-    @opik.track(project_name="secure-rag-memory-engine", name="bm25_search_similar_chunks")
+
+    @track(name="bm25_upsert_chunks", capture_input=False)
     def upsert_chunks(self, chunks: List[ProcessedChunk]) -> int:
         """
         Deduplicates chunks via unique hash IDs, caches them in memory, 
         and fits the BM25 statistical text index arrays.
         """
-        opik_context.update_current_trace(
-            metadata={
-                "phase": config.telemetry.current_phase,
+        # Attach high-level metadata to the root trace
+        update_current_span(
+            {
+                "engine": "BM25Engine",
+                "index_path": config.bm25.index_path,
                 "chunk_count": len(chunks),
-                "engine_type": "bm25"
             }
         )
 
         if not chunks:
-            print("[BM25Engine] Upsert aborted: The provided chunk list is completely empty.")
+            print("⚠️ [BM25Engine] Upsert aborted: The provided chunk list is completely empty.")
             return 0
         
         # Deduplicate and register payload blocks using memory map dictionary
@@ -66,28 +135,35 @@ class BM25Engine:
         ]
 
         # Instantiate/re-index the statistical BM25 storage tables
-        print(f"Building statistical BM25Okapi arrays over {len(tokenized_corpus)} processed text sequences...")
+        print(f"🔢 [BM25Engine] Building statistical BM25Okapi arrays over {len(tokenized_corpus)} processed text sequences...")
         self.bm25 = BM25Okapi(tokenized_corpus)
 
+        # Persist updated state to disk
+        self._save_index()
+
         return len(chunks)
-    
-    @opik.track(project_name="secure-rag-memory-engine", name="bm25_search_similar_chunks")
+
+    @track(name="bm25_search_similar_chunks")
     def search_similar_chunks(
-            self, query_text: str, top_k: int = config.retrieval.top_k, filter_dict: Optional[Dict[str, Any]] = None
+            self, query_text: str, top_k: Optional[int] = None, filter_dict: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Enforces workspace filtering constraints before calculation, computes BM25
         scores, and returns results in a layout that mirrors the CrhomaDB's output structure.
         """
-        opik_context.update_current_trace(
-            metadata={
-                "phase": config.telemetry.current_phase,
-                "query": query_text,
+        # Attach high-level metadata to the root trace
+        update_current_span(
+            {
+                "engine": "BM25Engine",
+                "index_path": config.bm25.index_path,
                 "top_k": top_k,
-                "has_filter": filter_dict is not None,
-                "engine_type": "bm25"
+                "has_filter": filter_dict is not None
             }
         )
+        
+        # Late binding with explicit None checks to avoid truthiness traps (e.g., limit=0)
+        if top_k is None:
+            top_k = config.retrieval.top_k
         
         # Formulate standard empty response pattern matching Chroma layout contracts
         default_response = {
@@ -178,11 +254,3 @@ class BM25Engine:
             "metadatas": [res_metas],
             "distances": [res_scores]  # Keeps the response swappable with test scripts
         }
-
-
-
-
-
-        
-
-

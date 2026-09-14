@@ -1,102 +1,93 @@
-import os
-from dotenv import load_dotenv 
-from ingestion.structures import RawOnenotePage
-from ingestion.base_parser import FixedSizeChunker
-from retrieval.vector_store import ChromaVectorEngine
-from config import config
-import opik
+from unittest.mock import patch
+import pytest
+from dotenv import load_dotenv
 
-# Automatically find and load the .env file into the system memory
 load_dotenv()
 
-def run_retrieval_test():
-    print("=" * 60)
-    print("INITIALIZING VECTOR ENGINE STORE TEST")
-    print("=" * 60)
+from retrieval.vector_store import ChromaVectorEngine
+from ingestion.structures import ProcessedChunk
 
-    # Ensure we have our API key set up in our terminal environment
-    # For Phase 1 testing, we check if the key exists before running
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        print("WARNING: OPENAI_API_KEY not found in your .env file.")
-        print("Please create a .env file at your project root containing your key.")
-        print("=" * 60)
-        return
-    
-    # Re-create our mock page and chunks from main.py (phase1-intergation-test)
-    mock_page = RawOnenotePage(
-        page_id="dl-course-04a",
-        notebook_name="AI_Studies",
-        section_name="Deeplearning_AI",
-        page_title="Transformer_Mechanics",
-        text_content=(
-            "### Self-Attention Overview\n"
-            "Self-attention allows tokens to dynamically weight their relevance to other tokens.\n"
-            "Formula: Attention(Q,K,V) = softmax(QK^T / sqrt(d_k))V\n"
-            "Todo Idea: Implement a clean multi-head attention block from scratch in PyTorch tomorrow."
-        ),
-        depth=0, 
-        page_hash="mock_hash_123"
+
+@pytest.fixture
+def isolated_vector_engine(tmp_path):
+    """
+    Fixture providing a ChromaVectorEngine sandboxed inside pytest's tmp_path.
+    Embeddings are mocked to avoid live API hits during unit tests.
+    """
+    test_db_dir = str(tmp_path / "chroma_db")
+    with patch("retrieval.vector_store.config.vector_store.persist_directory", test_db_dir):
+        engine = ChromaVectorEngine()
+        # Mock embeddings to return 1536-dim vector of constant values
+        with patch.object(engine, "_compute_embeddings_batch", side_effect=lambda texts: [[0.1] * 1536 for _ in texts]):
+            yield engine
+
+
+def create_mock_chunk(chunk_id: str, text: str, notebook: str, section: str) -> ProcessedChunk:
+    return ProcessedChunk(
+        chunk_id=chunk_id,
+        parent_page_id="page_123",
+        text_content=text,
+        chunk_index=0,
+        notebook_name=notebook,
+        section_name=section,
+        parent_page_title="Testing Vector Store",
+        content_hash="hash_" + chunk_id
     )
 
-    chunker = FixedSizeChunker(chunk_size = 100, chunk_overlap = 20)
-    payload = chunker.chunk_page(mock_page)
-    print(f"Generated {len(payload.chunks)} chunks from ingestion engine.")
 
-    # Instantiate our new Vector Store Layer
-    print("Intializing Ephemeral ChromaDB Client...")
-    engine = ChromaVectorEngine()
+def test_vector_store_upsert_and_contract_shape(isolated_vector_engine):
+    engine = isolated_vector_engine
+    chunk = create_mock_chunk("vec_1", "Transformer multi-head attention mechanism.", "AI_Studies", "Transformers")
+    
+    upserted_count = engine.upsert_chunks([chunk])
+    assert upserted_count == 1
 
-    # Attempt Upsert
-    print("Slicing payload and initializing batch upload...")
-    try:
-        total_upserted = engine.upsert_chunks(payload.chunks)
-        print("=" * 60)
-        print(f"SUCCESS: Seccessfully embedded and stored {total_upserted} chunks")
-        print(f"Database State: Collection count is now {engine.collection.count()}")
-        print("=" * 60)
-    except Exception as e:
-        print("=" * 60)
-        print(f"ERROR OCCURED DURING UPSERT: {e}")
-        print("=" * 60)
-        return
+    results = engine.search_similar_chunks(query_text="attention mechanism", top_k=1)
 
-    # Run a Live Semantic Query
-    try:
-        print("\n" + "🔍" * 20)
-        print("Running Live Semantic Retrieval Test")
-        print("🔍" * 20)
+    assert "ids" in results
+    assert "documents" in results
+    assert "metadatas" in results
+    assert "distances" in results
+    assert len(results["ids"][0]) == 1
+    assert results["ids"][0][0] == "vec_1"
 
-        user_query = "How do I implement multi-head attention in PyTorch?"
 
-        # We ask for the single top matches
-        search_results = engine.search_similar_chunks(query_text=user_query, top_k=2)
+def test_vector_store_empty_query_fallback(isolated_vector_engine):
+    engine = isolated_vector_engine
+    
+    results = engine.search_similar_chunks(query_text="   ", top_k=1)
+    
+    # Contract shape verification
+    assert results["ids"] == [[]]
+    assert results["documents"] == [[]]
+    assert results["metadatas"] == [[]]
+    assert results["distances"] == [[]]
 
-        # Parse and display what Chroma returned
-        print("\nTop Search Results Returned by ChromaDB:")
-        for idx, (doc, score, meta) in enumerate(zip(
-            search_results['documents'][0], 
-            search_results['distances'][0], 
-            search_results['metadatas'][0]
-        )):
-            print(f"\n[Rank {idx + 1}] (Distance/Inexactness Score: {score:.4f})")
-            print(f"   Notebook: {meta['notebook_name']} -> Section: {meta['section_name']}")
-            print(f"   Content: {repr(doc)}")
-        print("=" * 60)
 
-    except Exception as e:
-        print("=" * 60)
-        print(f"ERROR OCCURED DURING QUERYING: {e}")
-        print("=" * 60)
+def test_vector_store_metadata_filtering(isolated_vector_engine):
+    engine = isolated_vector_engine
+    chunk_a = create_mock_chunk("id_a", "Public data context.", "Public_NB", "General")
+    chunk_b = create_mock_chunk("id_b", "Private data context.", "Private_NB", "General")
 
-if __name__ == "__main__":
-    if config.telemetry.enable_opik:
-        opik.configure(
-            api_key=os.getenv("OPIK_API_KEY"),
-            workspace=os.getenv("OPIK_WORKSPACE"),
-            force=True,
-            automatic_approvals=True
-        )
+    engine.upsert_chunks([chunk_a, chunk_b])
 
-    run_retrieval_test() 
+    results = engine.search_similar_chunks(
+        query_text="context",
+        top_k=5,
+        filter_dict={"notebook_name": "Public_NB"}
+    )
 
+    assert len(results["ids"][0]) == 1
+    assert results["ids"][0][0] == "id_a"
+
+
+def test_vector_store_reset(isolated_vector_engine):
+    engine = isolated_vector_engine
+    chunk = create_mock_chunk("id_reset", "Temporary payload.", "Test_NB", "General")
+    engine.upsert_chunks([chunk])
+
+    assert engine.collection.count() == 1
+
+    engine.reset_store()
+
+    assert engine.collection.count() == 0

@@ -24,7 +24,7 @@ Its goals are to:
 
 ---
 
-# Core Architectural Manifestos
+# Core Architectural Principles
 
 ---
 
@@ -34,24 +34,22 @@ Its goals are to:
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
-High-level orchestration frameworks (LangChain, LlamaIndex, Haystack, etc.) will not implement any core business logic.
+High-level orchestration frameworks such as LangChain, LlamaIndex, and Haystack will not implement core business logic.
 
-Frameworks may only be used as infrastructure components.
+Core ingestion, retrieval, memory, orchestration, and state-management logic will be implemented directly in Python.
+
+Infrastructure libraries and services may be used where they provide focused capabilities without owning application logic.
 
 Examples include:
 
-- LiteLLM
-- ChromaDB
-- Opik
-- Redis
-- Ragas
-- Tenacity
+- LiteLLM — LLM provider abstraction
+- ChromaDB — vector storage
+- Opik — observability
+- Redis — caching
+- Ragas — evaluation support
+- Tenacity — retry handling
 
 ### Rationale
 
@@ -64,10 +62,6 @@ The goal of this project is to demonstrate first-principles engineering rather t
 **Status**
 
 Accepted
-
-**Discussed**
-
-Yes
 
 ### Decision
 
@@ -87,20 +81,21 @@ Delay production concerns until they solve real problems.
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
-Every optimization must improve measurable evaluation metrics.
+Every phase should improve the system without unnecessarily compromising:
 
-Metrics include
+* correctness
+* retrieval quality
+* latency
+* maintainability
 
-- Context Precision
-- Context Recall
-- Faithfulness
-- Latency
+Changes should be evaluated using measurable system metrics where applicable, particularly:
+
+* Context Precision
+* Context Recall
+* Faithfulness
+* Latency
 
 No optimization should be introduced solely because it appears theoretically superior.
 
@@ -111,10 +106,6 @@ No optimization should be introduced solely because it appears theoretically sup
 **Status**
 
 Accepted
-
-**Discussed**
-
-Yes
 
 ### Decision
 
@@ -145,10 +136,6 @@ Supports
 **Status**
 
 Accepted
-
-**Discussed**
-
-Yes
 
 ### Decision
 
@@ -186,10 +173,6 @@ Business logic should never leak between pillars.
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
 RawOnenotePage and ProcessedChunk are immutable representations of different pipeline stages.
@@ -203,10 +186,6 @@ Each stage produces a new representation rather than modifying previous ones.
 **Status**
 
 Accepted
-
-**Discussed**
-
-Yes
 
 ### Decision
 
@@ -229,10 +208,6 @@ They coexist.
 **Status**
 
 Accepted
-
-**Discussed**
-
-Yes
 
 ### Decision
 
@@ -266,10 +241,6 @@ Chunking and enrichment evolve independently.
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
 Each chunk maintains
@@ -289,10 +260,6 @@ Retrieved answers always use raw text.
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
 Enriched embedding text is generated when embeddings are created.
@@ -301,27 +268,27 @@ It is not permanently persisted unless a future embedding strategy requires it.
 
 ---
 
-## ADR-010 — Layout-Aware Parsing Deferred
+## ADR-010 — Advanced Document Parsing Deferred
 
 **Status**
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
-HTML parsing.
+Phase 1 will use the minimal parser required for the initial document source.
 
-BeautifulSoup.
+Advanced document parsing capabilities are deferred to Phase 2, including:
 
-OCR.
+- HTML-specific parsing
+- BeautifulSoup-based extraction
+- OCR
+- layout-aware extraction
+- structural document parsing
 
-Structural chunking.
+### Rationale
 
-All postponed until Phase 2.
+Phase 1 prioritizes the retrieval, persistence, and evaluation boundaries before introducing document-format-specific parsing complexity.
 
 ---
 
@@ -329,17 +296,24 @@ All postponed until Phase 2.
 
 **Status**
 
-Research
+Accepted
 
-**Discussed**
+### Decision
 
-Yes
+ChromaDB now persists its collection to disk using `PersistentClient`.
 
-### Current Position
+BM25 is also persisted independently because it is a separate lexical retrieval implementation whose state must survive application restarts.
 
-Ephemeral storage is sufficient for early development.
 
-Persistent storage should only be introduced once it solves an observed problem.
+### Rationale
+
+### Rationale
+
+Persistent storage separates ingestion from query and evaluation workflows, allowing an already-ingested corpus to be reused across application runs and experiments.
+
+Retrieval state is isolated per experiment as defined in ADR-041.
+
+This decision also follows ADR-002 (Data-Driven Iteration) and ADR-026 (Evaluation Before Optimization).
 
 ---
 
@@ -349,15 +323,15 @@ Persistent storage should only be introduced once it solves an observed problem.
 
 Research
 
-**Discussed**
-
-Yes
-
 ### Current Position
 
 Not required during Phase 1.
 
-Revisit after persistent vector storage exists.
+### Current Position
+
+Chunk-level content deduplication is not required for Phase 1.
+
+The question remains open and should be revisited if evaluation or later ingestion workflows demonstrate a need for persistent content-level deduplication.
 
 ---
 
@@ -370,10 +344,6 @@ Revisit after persistent vector storage exists.
 **Status**
 
 Accepted
-
-**Discussed**
-
-Yes
 
 ### Decision
 
@@ -389,15 +359,17 @@ Future retrieval algorithms should not change orchestration code.
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
-Hybrid retrieval combines rankings rather than raw similarity scores.
+Hybrid retrieval will combine retriever rankings rather than directly adding dense and lexical similarity scores.
 
-Raw cosine and BM25 scores should never be added together.
+Reciprocal Rank Fusion (RRF) is the selected fusion strategy.
+
+Raw cosine and BM25 scores will not be added directly because they are not directly comparable.
+
+### Implementation Status
+
+RRF is planned for Phase 2. Phase 1 currently combines dense and lexical retrieval results without RRF.
 
 ---
 
@@ -407,15 +379,15 @@ Raw cosine and BM25 scores should never be added together.
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
-Only fused Top-K candidates are reranked.
+A Cross-Encoder will rerank only the fused Top-K retrieval candidates.
 
-The Cross-Encoder should never rerank the full corpus.
+The Cross-Encoder will not rerank the full corpus.
+
+### Implementation Status
+
+Cross-Encoder reranking is planned for Phase 2, after retrieval fusion.
 
 ---
 
@@ -425,15 +397,15 @@ The Cross-Encoder should never rerank the full corpus.
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
 Intent routing belongs to Phase 3.
 
-Retrieval improvements should be isolated from routing improvements.
+Retrieval improvements should remain independently evaluable from routing improvements.
+
+### Implementation Status
+
+Intent routing is not part of the Phase 1 retrieval implementation.
 
 ---
 
@@ -443,19 +415,19 @@ Retrieval improvements should be isolated from routing improvements.
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
-Agent execution uses a bounded finite-state loop.
+Future agent execution will use a bounded finite-state loop.
 
 Maximum attempts:
 
 3
 
 Infinite retry loops are prohibited.
+
+### Implementation Status
+
+The self-corrective agent loop is planned for Phase 3 and is not part of the current Phase 1 pipeline.
 
 ---
 
@@ -468,10 +440,6 @@ Infinite retry loops are prohibited.
 **Status**
 
 Accepted
-
-**Discussed**
-
-Yes
 
 ### Decision
 
@@ -486,10 +454,6 @@ Vector memory is a derived representation.
 **Status**
 
 Accepted
-
-**Discussed**
-
-Yes
 
 ### Decision
 
@@ -507,10 +471,6 @@ Its implementation may evolve without changing callers.
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
 Every message contains a session_id from the beginning.
@@ -524,10 +484,6 @@ Even if only a default session initially exists.
 **Status**
 
 Accepted
-
-**Discussed**
-
-Yes
 
 ### Decision
 
@@ -543,13 +499,9 @@ Isolation occurs through metadata filtering.
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
-Memory evolves into four layers.
+The target memory architecture evolves into four layers:
 
 Tier 1
 
@@ -567,6 +519,8 @@ Tier 3B
 
 Long-term profile memory.
 
+These layers are introduced progressively across later phases rather than implemented together in Phase 1.
+
 ---
 
 ## ADR-023 — Fact Invalidation Instead of Deletion
@@ -574,10 +528,6 @@ Long-term profile memory.
 **Status**
 
 Accepted
-
-**Discussed**
-
-Yes
 
 ### Decision
 
@@ -597,10 +547,6 @@ No hard deletion occurs.
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
 Profile facts track
@@ -618,10 +564,6 @@ to preserve historical evolution.
 **Status**
 
 Accepted
-
-**Discussed**
-
-Yes
 
 ### Decision
 
@@ -645,6 +587,122 @@ This replaces naive append-only memory.
 
 ---
 
+## ADR-038 — Context-Managed SQLite Connection Lifecycle
+
+**Status**
+
+Accepted
+
+### Decision
+
+All SQLite database connections must use a dedicated context-managed connection lifecycle that guarantees:
+
+- explicit transaction handling
+- rollback on failure
+- connection closure
+
+State-management code must not manage SQLite connections independently.
+
+### Rationale
+
+Centralizing connection lifecycle management prevents connection leaks and database-locking issues while keeping transaction handling consistent across StateManager operations.
+
+### Consequences
+
+- SQLite resources are released deterministically.
+- Transaction handling is standardized.
+- State-management operations avoid duplicated connection lifecycle boilerplate.
+
+---
+
+## ADR-039 — Human-Readable Session Names at the Application Boundary
+
+**Status:** Accepted
+
+### Context
+
+The interactive CLI requires users to work with conversational sessions using names rather than opaque database identifiers.
+
+A session therefore has two identities:
+
+- `session_id` — immutable internal identifier used by database relationships
+- `session_name` — human-readable identifier used by the CLI
+
+### Decision
+
+`main.py` maintains the active session using `current_session_name`.
+
+The application resolves `session_name` to the internal `session_id` through StateManager before executing the RAG pipeline.
+
+The CLI does not directly perform SQL lookups or access private StateManager methods.
+
+For session-management commands, StateManager exposes public name-based operations such as:
+
+- list_sessions()
+- get_full_history_by_name()
+- clear_session_by_name()
+- delete_session_by_name()
+- rename_session()
+
+### Rationale
+
+The CLI should operate in user-facing concepts rather than database implementation details.
+
+Keeping name → ID resolution inside StateManager preserves encapsulation and allows the underlying database representation to change without requiring changes to main.py.
+
+The session ID remains stable even when the session is renamed.
+
+### Consequence
+
+The application layer is simpler, while StateManager owns the mapping between human-readable session identity and persistent database identity.
+
+---
+
+## ADR-040 — Separate Session Metadata from Conversation Messages
+
+**Status:** Accepted
+
+### Context
+
+A conversational session requires both:
+
+- mutable human-readable metadata such as `session_name`
+- persistent message records referencing that session
+
+Using the session name directly as the message relationship would make renaming expensive and error-prone.
+
+### Decision
+
+SQLite uses separate `sessions` and `messages` tables.
+
+The `sessions` table contains:
+
+- `session_id` — primary key
+- `session_name` — unique human-readable name
+- `created_at`
+- `updated_at`
+
+The `messages` table references `sessions.session_id`.
+
+`session_id` is treated as an immutable internal identifier.
+
+`session_name` may be renamed without modifying existing message rows.
+
+### Rationale
+
+Separating identity from display metadata prevents a rename operation from requiring updates across all messages belonging to the session.
+
+The unique constraint on `session_name` also provides deterministic name-based session lookup.
+
+### Consequences
+
+- Session renames modify one session record.
+- Messages retain stable foreign-key relationships.
+- Session deletion can cascade to associated messages.
+- CLI-facing session operations can use names while database relationships continue using IDs.
+
+---
+
 # Evaluation Decisions
 
 ---
@@ -654,10 +712,6 @@ This replaces naive append-only memory.
 **Status**
 
 Accepted
-
-**Discussed**
-
-Yes
 
 ### Decision
 
@@ -671,10 +725,6 @@ Every optimization must be benchmarked against the previous phase.
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
 Development begins with approximately five smoke-test questions.
@@ -687,13 +737,9 @@ Development begins with approximately five smoke-test questions.
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
-Phase 1 establishes a 20-question gold dataset.
+Phase 1 establishes a 20-question gold evaluation dataset.
 
 Future phases expand rather than replace it.
 
@@ -709,15 +755,15 @@ Future phases expand rather than replace it.
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
 Sequential execution first.
 
 Async later.
+
+### Implementation Status
+
+Sequential execution remains the Phase 1 implementation.
 
 ---
 
@@ -727,13 +773,13 @@ Async later.
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
 Parallel retrieval belongs only after retrieval correctness is verified.
+
+### Implementation Status
+
+Retrieval remains sequential in Phase 1.
 
 ---
 
@@ -743,15 +789,15 @@ Parallel retrieval belongs only after retrieval correctness is verified.
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
 Caching should compensate for latency introduced by agentic reasoning.
 
 It should not hide inefficient architecture.
+
+### Implementation Status
+
+Redis caching is deferred to a later phase.
 
 ---
 
@@ -765,10 +811,6 @@ It should not hide inefficient architecture.
 
 Accepted
 
-**Discussed**
-
-Yes
-
 ### Decision
 
 Sensitive patterns are redacted during ingestion before storage.
@@ -781,13 +823,222 @@ Sensitive patterns are redacted during ingestion before storage.
 
 Accepted
 
-**Discussed**
+### Decision
 
-Yes
+Retrievers must apply authorization filters before similarity search so unauthorized documents are excluded from retrieval candidates.
+
+### Implementation Status
+
+Metadata-based access control is a future security capability and is not part of the current Phase 1 retrieval implementation.
+
+---
+
+# Experiment and Observability Decisions
+
+---
+
+## ADR-041 — Experiment-Isolated Retrieval State
+
+**Status:** Accepted
+
+### Context
+
+Different experiments may change parameters that affect the structure, representation, or retrieval behavior of the corpus, including:
+
+- chunking strategy
+- chunk size
+- chunk overlap
+- embedding model
+- retrieval configuration
+
+Allowing different experiment configurations to share the same vector collection, BM25 index, or ingestion manifest can mix incompatible retrieval state.
 
 ### Decision
 
-Retrievers should filter unauthorized documents before similarity search.
+Persistent retrieval state is isolated by `experiment_id`.
+
+The active experiment determines:
+
+```text
+experiment_id
+      ├── Chroma collection
+      ├── BM25 index
+      └── ingestion manifest
+```
+
+Experiment metadata is additionally recorded in the experiment registry.
+
+### Rationale
+
+Vector and lexical retrieval must operate over the same chunk corpus.
+
+A changed chunking or embedding strategy must therefore not silently reuse incompatible persistent state.
+
+The manifest is also experiment-specific because changing the experiment configuration must be able to trigger independent ingestion.
+
+### Consequences
+
+Changing the active experiment changes the persistent retrieval resources without requiring application control-flow changes.
+
+Experiment inspection is separate from conversational session state.
+
+---
+
+## ADR-042 — Separate Chunk Identity from Content Identity
+
+**Status**
+
+Accepted
+
+### Context
+
+### Context
+
+A content hash alone cannot distinguish identical text occurring at different source locations.
+
+Chunk identity and content identity therefore represent different concepts.
+
+This incorrectly conflated:
+
+- where a chunk came from
+- what content the chunk contains
+
+### Decision
+
+Use two deterministic hashes with different semantics.
+
+`chunk_id`:
+
+SHA-256 of:
+
+`parent_page_id + ":" + chunk_index`
+
+`content_hash`:
+
+SHA-256 of the chunk text.
+
+Therefore:
+
+- `chunk_id` represents chunk identity/location.
+- `content_hash` represents content identity.
+
+Identical content from different source locations can therefore coexist while
+remaining deterministic across ingestion runs.
+
+### Consequences
+
+- Duplicate content is not accidentally collapsed by the primary chunk ID.
+- Chunk IDs remain reproducible.
+- Content identity remains available independently for future deduplication,
+  change detection, or content-level analysis.
+
+### Relationship to ADR-012
+
+`content_hash` provides content identity but does not perform deduplication.
+
+Chunk-level content deduplication therefore remains an open research question under ADR-012.
+
+---
+
+## ADR-043 — Shared Telemetry Project with Metadata-Based Trace Scoping
+
+**Status:** Accepted
+
+### Context
+
+The application contains multiple runtime workflows, including:
+
+- ingestion through `ingest.py`
+- interactive querying through `main.py`
+- future evaluation workflows
+
+These workflows produce telemetry traces that belong to the same application but may operate under different:
+
+- phases
+- experiments
+- runtime operations
+
+Creating a separate Opik project for every phase or experiment would fragment observability and make cross-phase comparisons more difficult.
+
+### Decision
+
+All application telemetry uses a single stable Opik project:
+
+`secure-rag-memory-engine`
+
+Trace scope is represented through runtime metadata rather than separate Opik projects.
+
+Every root trace records:
+`experiment_id`
+`phase`
+
+Additional operation-specific metadata may be attached to individual traces or spans.
+
+The telemetry architecture therefore follows:
+
+```
+Opik project
+    │
+    └── secure-rag-memory-engine
+            │
+            ├── phase
+            └── experiment_id
+```
+
+To inspect a particular phase or experiment, telemetry consumers filter traces using:
+`phase`
+`experiment_id`
+
+
+The application does not create separate Opik projects for these scopes.
+
+### Implementation Status
+
+The shared Opik project and metadata-based trace scoping are implemented for the current telemetry architecture. This decision does not imply that the evaluation harness or all future evaluation workflows are complete.
+
+### Rationale
+
+A shared project provides:
+
+- one application-level observability namespace
+- consistent trace structure across phases
+- easier comparison between experiments
+- centralized operational history
+- reduced telemetry configuration complexity
+
+Metadata provides the logical separation required for experiment and phase analysis without physically fragmenting the telemetry backend.
+
+### Consequences
+
+- All enabled application runs appear in the same Opik project.
+- Phase and experiment filters must be applied when inspecting traces.
+- Root traces must attach the current experiment_id and phase.
+- Operation-specific metadata should describe the runtime behavior without duplicating experiment identity.
+- Changing the experiment does not require changing the Opik project.
+
+### Boundary
+
+Experiment isolation of retrieval state and telemetry grouping are separate concerns.
+
+Retrieval state is physically isolated:
+
+```
+experiment_id
+    ├── Chroma collection
+    ├── BM25 index
+    └── ingestion manifest
+```
+
+Telemetry is logically isolated:
+
+```
+Opik project
+    ├── phase metadata
+    └── experiment_id metadata
+```
+
+Telemetry metadata must never be treated as a substitute for retrieval-state isolation.
+
 
 ---
 
@@ -801,17 +1052,15 @@ Retrievers should filter unauthorized documents before similarity search.
 
 Open
 
-**Discussed**
-
-Yes
-
-Question
+### Question
 
 Should enriched embedding text eventually be persisted to simplify embedding regeneration?
 
-Current Position
+### Current Position
 
-Generate on demand.
+The current implementation generates enriched embedding text on demand and does not persist it.
+
+Whether to persist it remains open for future experimentation.
 
 ---
 
@@ -821,13 +1070,11 @@ Generate on demand.
 
 Research
 
-**Discussed**
-
-Partially
-
-Question
+### Question
 
 Will the architecture eventually support distributed retrieval workers?
+
+### Current Position
 
 Decision deferred until scalability becomes a demonstrated need.
 
@@ -839,9 +1086,7 @@ Decision deferred until scalability becomes a demonstrated need.
 
 Research
 
-**Discussed**
-
-Partially
+### Current Position
 
 Decision intentionally postponed until Phase 4 experimentation.
 
@@ -857,15 +1102,11 @@ Decision intentionally postponed until Phase 4 experimentation.
 
 Superseded
 
-**Discussed**
-
-Yes
-
-Original
+### Original
 
 Conversation context consisted only of recent chronological messages.
 
-Replacement
+### Replacement
 
 Stable get_conversation_context() supporting
 
@@ -895,18 +1136,14 @@ If none of these are true, the decision should be reconsidered.
 
 # Change Policy
 
-New decisions should never overwrite existing ones.
-
-Instead:
+When an accepted decision changes, the original ADR is retained and marked Superseded.
 
 Accepted
 
 ↓
-
 Superseded
 
 ↓
-
 Replacement ADR
 
 This preserves the architectural history of the project and documents why the system evolved over time.

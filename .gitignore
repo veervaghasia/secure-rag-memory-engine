@@ -22,3 +22,6 @@ data/ingestion_manifest.json
 
 # Exclude temp md files used for AI sessions
 upload_docs/
+
+# Exclude Persistent state
+data/

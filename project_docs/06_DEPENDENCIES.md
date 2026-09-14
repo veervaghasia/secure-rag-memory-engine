@@ -2,17 +2,18 @@
 
 This document describes architectural dependencies between features.
 
-It is intentionally independent of filenames and implementation details.
-
 Its purpose is to answer:
 
 * What can be built independently?
 * What must already exist?
+* What depends on which stable interface?
 * What is safe to refactor?
+
+The dependency model is independent of the physical project layout, while stable public interfaces and runtime entry points may be referenced where they define architectural boundaries.
 
 ---
 
-# Global Dependency Hierarchy
+# Global Architectural Dependency Hierarchy
 
 ```text
 Application
@@ -37,14 +38,17 @@ Application Components
 
 ```text
 Configuration System
-
-├── Chunking
-├── Retrieval
-├── Memory
-├── Cache
-├── Telemetry
-├── Runtime
-└── Evaluation
+        │
+        ▼
+Runtime Components
+        │
+        ├── Ingestion
+        ├── Retrieval
+        ├── Memory
+        ├── Cache
+        ├── Telemetry
+        ├── Evaluation
+        └── Application Runtime
 
 ↓
 
@@ -57,14 +61,112 @@ Consumed by
 └── main.py
 ```
 
+## Telemetry Dependencies
+
+Application components
+→ telemetry abstraction
+→ Opik
+
+LiteLLM
+→ telemetry integration
+→ Opik
+
+The application does not directly depend on Opik configuration from individual business components.
+
+Telemetry is an observability dependency rather than a functional dependency.
+
+If telemetry becomes unavailable, ingestion and query execution should continue without telemetry.
+
+```text
+Configuration System
+        │
+        ▼
+Telemetry Configuration
+        │
+        ├── phase
+        ├── experiment_id
+        └── telemetry enable/disable state
+        │
+        ▼
+Telemetry Abstraction
+        │
+        ▼
+Opik
+        │
+        ▼
+Application-Level Project
+secure-rag-memory-engine
+```
+
+Both application runtimes depend on the telemetry abstraction:
+
+```
+                    Telemetry
+                       │
+              ┌────────┴────────┐
+              ▼                 ▼
+          ingest.py          main.py
+              │                 │
+              └────────┬────────┘
+                       ▼
+                Opik Project
+        secure-rag-memory-engine
+```
+
+Trace filtering by phase or experiment depends on the metadata attached by the telemetry layer.
+
+The application workflows do not directly depend on Opik configuration details.
+
 ---
 
-# Depencency types
+# Infrastructure Compatibility Constraints
 
-* Runtime dependency
-* Compile-time dependency
-* Data dependency
-* Evaluation dependency
+## LiteLLM / Opik Compatibility
+
+LiteLLM must remain at a version compatible with the Opik integration.
+
+The current minimum supported LiteLLM version is:
+
+`litellm >= 1.94.0`
+
+This constraint exists because older LiteLLM versions can generate trace/span IDs with timestamps that are rejected by newer Opik validation.
+
+---
+
+# Dependency types
+
+* Runtime dependency - required during execution
+* Data dependency - depends on persisted/generated data
+* Evaluation dependency - required to measure behavior
+* Operational dependency - required for observability, infrastructure, or deployment behavior
+
+---
+
+# Application Runtime
+
+```text
+Configuration
+      ↓
+Application Runtime
+      │
+      ├───────────────┐
+      │               │
+ Ingestion        Query Runtime
+ Runtime              │
+      │               ▼
+      ▼          Session Management
+Persistent             │
+Retrieval State         ▼
+      │          RAG Orchestrator
+      │               │
+      └───────┬───────┘
+              ▼
+       Chroma + BM25
+```
+
+Ingestion and interactive querying are separate runtime workflows.
+
+The query runtime depends on persistent retrieval state produced by ingestion.
 
 ---
 
@@ -82,11 +184,30 @@ RawOnenotePage
 Chunk Generation
         ↓
 ProcessedChunk
-        ↓
-Vector Store
-        |
-        |
-BM25 Index
+        │
+        ├───────────────┐
+        ▼               ▼
+Embedding Generation   BM25 Indexing
+        │               │
+        ▼               ▼
+Chroma Collection    BM25 Index
+        │               │
+        └───────┬───────┘
+                ▼
+        Experiment-Specific
+        Persistent Retrieval State
+```
+
+The active experiment_id determines the retrieval resources used by the ingestion pipeline.
+
+The ingestion manifest is also experiment-specific.
+
+Therefore:
+```
+        experiment_id
+        ├── manifest
+        ├── Chroma collection
+        └── BM25 index
 ```
 
 ---
@@ -102,35 +223,170 @@ Vector Search
 ```text
 BM25 Index
         ↓
-Keyword Search
+Lexical Search
+```
+
+```
+Vector Store
+        ↓
+Vector Search
+        │
+        ├──────────────┐
+        │              │
+        ▼              ▼
+Vector Results     BM25 Results
+        │              │
+        └──────┬───────┘
+               ▼
+        Simple Result
+        Concatenation
 ```
 
 ---
 
-## Memory
+## State and Session Management
 
 ```text
-SQLite
-        ↓
-ChatMessage
-        ↓
-Session History
-        ↓
-get_conversation_context()
+CLI
+ │
+ ▼
+current_session_name
+ │
+ ▼
+StateManager
+ │
+ ├── get_or_create_session()
+ │          │
+ │          ▼
+ │      session_id
+ │
+ ├── list_sessions()
+ │
+ ├── rename_session()
+ │
+ ├── get_full_history_by_name()
+ │
+ ├── clear_session_by_name()
+ │
+ └── delete_session_by_name()
+          │
+          ▼
+   SQLite sessions table
+          │
+          ▼
+   SQLite messages table
+          │
+          ▼
+get_conversation_context(session_id)
 ```
+
+The CLI depends on the public StateManager API.
+
+The CLI does not depend directly on SQLite schema or private StateManager helpers.
+
+---
+
+## Session Identity
+
+```text
+Human-facing session name
+          │
+          ▼
+StateManager
+          │
+          ▼
+Immutable session_id
+          │
+          ▼
+messages.session_id
+```
+
+Session names are unique and renameable.
+
+Session IDs are persistent internal identifiers and remain unchanged during renames.
+
+Therefore:
+```
+        Rename Session
+        ↓
+        UPDATE sessions.session_name
+```
+
+rather than:
+```
+        UPDATE every message
+```
+
+---
+
+## Experiment Management
+
+```text
+Experiment Configuration
+        ↓
+experiment_id
+        │
+        ├───────────────┐
+        │               │
+        ▼               ▼
+Chroma Collection    BM25 Index
+        │               │
+        └───────┬───────┘
+                ▼
+        Ingestion Manifest
+
+experiment_id
+        │
+        ▼
+Query Runtime
+        │
+        ├── ChromaVectorEngine
+        └── BM25Engine
+
+experiment_id
+        ↓
+Experiment Registry
+        ↓
+data/experiments.json
+```
+
+Experiment state is independent from chat-session state.
+
+Experiments describe retrieval/application configurations.
+
+Sessions describe conversational state.
+
+But, both ingestion and querying must operate against the same experiment-specific retrieval state.
+
+Experiment identity also propagates into telemetry:
+
+```text
+experiment_id
+      │
+      ├── Chroma Collection
+      ├── BM25 Index
+      ├── Ingestion Manifest
+      ├── Experiment Registry
+      └── Telemetry Metadata
+```
+
+Telemetry metadata does not provide retrieval-state isolation. It only identifies which experiment produced a trace.
 
 ---
 
 ## Evaluation
 
 ```text
-Pipeline
-        ↓
-Gold Dataset
-        ↓
-Evaluation Harness
-        ↓
-Baseline Metrics
+Retrieval / Generation Pipeline
+              │
+              │
+Gold Evaluation Dataset
+              │
+              ▼
+      Evaluation Harness
+              │
+              ▼
+           Metrics
 ```
 
 ---
@@ -176,13 +432,17 @@ Prompt Builder
 ## Conversation Memory
 
 ```text
-SQLite
+SQLite Conversation History
         ↓
 ChatMessage
         ↓
-SessionVectorChunk
+SessionVectorChunk Generation
         ↓
-Semantic Retrieval
+Embedding
+        ↓
+Shared Chroma Collection
+        ↓
+Session-Scoped Semantic Retrieval
         ↓
 get_conversation_context()
 ```
@@ -211,6 +471,30 @@ Hybrid Retrieval
 
 ---
 
+## Agent Loop
+
+```text
+Retrieve
+   ↓
+Generate
+   ↓
+Validate
+   │
+   ├── Pass ──► Return
+   │
+   └── Fail
+          ↓
+     Rewrite Query
+          ↓
+       Retrieve
+```
+
+Maximum iterations: 3
+
+Execution is bounded; infinite retry loops are prohibited.
+
+---
+
 ## Long-Term Memory
 
 ```text
@@ -229,25 +513,43 @@ Profile Memory
 
 ---
 
-## Agent Loop
+## Access Control
 
 ```text
+User / Session Context
+        ↓
+Authorization Context
+        ↓
 Retrieval
         ↓
-Generation
+ACL Filtering
         ↓
-Validation
+Authorized Context
         ↓
-Rewrite
-        ↓
-Retry
+Prompt Builder
 ```
-
-Maximum iterations: 3
 
 ---
 
 # Phase 4
+
+## Parallel Retrieval
+
+```text
+User Query
+      │
+      ├───────────────┐
+      ▼               ▼
+Vector Search     BM25 Search
+      │               │
+      └───────┬───────┘
+              ▼
+      Reciprocal Rank Fusion
+              ▼
+        Cross Encoder
+```
+
+---
 
 ## Semantic Cache
 
@@ -268,19 +570,31 @@ Return     Full Pipeline
 
 ---
 
-## Parallel Retrieval
+# Application Boundary Dependencies
+
+The following describes current application-boundary dependencies. It does not define the internal implementation of these components.
 
 ```text
-Intent Router
-      │
-      ├───────────────┐
-      │               │
-Vector Search     BM25 Search
-      │               │
-      └───────┬───────┘
-              ▼
-        Reciprocal Rank Fusion
+main.py
+  │
+  ├── Configuration
+  ├── StateManager
+  ├── ChromaVectorEngine
+  ├── BM25Engine
+  ├── run_rag_pipeline()
+  └── experiment_registry
 ```
+
+Responsibilities:
+
+- main.py owns user interaction and command dispatch.
+- StateManager owns session persistence and session identity resolution.
+- retrieval engines own retrieval state.
+- run_rag_pipeline() owns query orchestration.
+- experiment_registry owns experiment metadata.
+- configuration determines the active experiment and corresponding persistent resources.
+
+main.py should not contain SQL, retrieval algorithms, or experiment persistence logic.
 
 ---
 
@@ -333,11 +647,15 @@ Examples
 
 ## Evaluation Interface
 
+The evaluation workflow should expose a stable evaluation entry point.
+
+Conceptually:
+
 ```
-eval_harness.py
+Evaluation Harness
 ```
 
-Every architectural optimization should be measurable using the same evaluation pipeline.
+Every architectural optimization should remain measurable using the same evaluation workflow.
 
 ---
 
