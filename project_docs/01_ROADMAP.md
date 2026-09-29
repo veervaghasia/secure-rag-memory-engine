@@ -7,20 +7,34 @@ This document is the single source of truth for implementation progress.
 It defines:
 
 - project phases
-- architectural goals
 - implementation milestones
 - branch planning
 - completion criteria
 - phase dependencies
 
-It intentionally does **not** describe implementation details.
-Those belong in the architecture documents.
+It intentionally does not define the complete target architecture or explain implementation details.
+
+The architecture document defines long-term system responsibilities and capability ownership.
+
+Architectural decisions and trade-offs belong in the ADR document.
+
+Runtime behavior and implementation details are documented separately.
+
+---
+
+## Relationship to Architecture
+
+The architecture document defines the complete target capability set and ownership boundaries of the system.
+
+This roadmap defines when those capabilities are introduced.
+
+Therefore, a capability appearing in the architecture does not imply that it is already implemented. Its implementation status is determined by the roadmap and current-state documentation.
 
 ---
 
 # Overall Development Philosophy
 
-This project follows three architectural manifestos.
+This project follows three architectural principles.
 
 ## 1. Tracer Bullet Development
 
@@ -68,7 +82,7 @@ Consumers remain unchanged
 
 | Phase | Focus | Status |
 |---------|--------|---------|
-| Phase 1 | Working MVP | In Progress |
+| Phase 1 | Working MVP + Persistent Runtime | In Progress |
 | Phase 2 | Retrieval Quality | Planned |
 | Phase 3 | Agentic Reasoning & Governance | Planned |
 | Phase 4 | Production Optimization | Planned |
@@ -76,6 +90,8 @@ Consumers remain unchanged
 ---
 
 # Phase 1 — Baseline MVP
+
+**Status: In Progress**
 
 ## Objective
 
@@ -98,6 +114,10 @@ The emphasis is establishing architecture rather than maximizing quality.
 - ProcessedChunk generation
 - Chroma insertion
 - BM25 indexing
+- persistent ChromaDB storage
+- persistent BM25 storage
+- experiment-specific retrieval state
+- experiment-specific ingestion manifests
 
 ### Explicitly Out of Scope
 
@@ -119,6 +139,8 @@ The emphasis is establishing architecture rather than maximizing quality.
 - simple hybrid retrieval
 - context assembly
 - LLM generation
+- persistent retrieval-state consumption
+- multi-turn query execution through the interactive runtime
 
 ### Explicitly Out of Scope
 
@@ -136,8 +158,18 @@ The emphasis is establishing architecture rather than maximizing quality.
 
 - SQLite persistence
 - ChatMessage
-- session restoration
+- session metadata and message separation
+- immutable session IDs
+- human-readable session names
+- session creation and restoration
+- session switching
+- session renaming
+- session history inspection
+- session clearing
+- session deletion
 - get_conversation_context()
+- persistent multi-turn conversation state
+- interactive CLI session management
 
 ### Explicitly Out of Scope
 
@@ -153,9 +185,67 @@ The emphasis is establishing architecture rather than maximizing quality.
 ### Scope
 
 - Opik tracing
+- centralized application telemetry
+- phase-level and experiment-level trace identification
 - evaluation harness
 - smoke evaluation
 - baseline evaluation
+
+---
+
+## Planned Branches
+
+### Completed / Active Branches
+
+#### feature/phase1-ingestion
+
+Build baseline ingestion.
+
+---
+
+#### feature/phase1-vector-store
+
+Implement Chroma integration.
+
+---
+
+#### feature/phase1-bm25
+
+Implement lexical retrieval.
+
+---
+
+#### feature/phase1-rag-engine
+
+Connect retrieval pipeline.
+
+---
+
+#### feature/phase1-session-memory
+
+SQLite logging.
+
+Conversation restoration.
+
+---
+
+#### feature/phase1-persistent-storage
+
+Establish persistent experiment-isolated retrieval storage for ChromaDB and BM25, separate ingestion from query execution, and provide an interactive multi-session runtime with session management.
+
+---
+
+### Remaining Phase 1 Branches
+
+#### feature/phase1-evaluation
+
+Run smoke tests and establish the 20-question Phase 1 baseline against the persistent retrieval state.
+
+---
+
+#### refactor/phase1-cleanup
+
+Final cleanup and modifications before moving to phase 2. 
 
 ---
 
@@ -167,67 +257,55 @@ The emphasis is establishing architecture rather than maximizing quality.
 
 ✓ Hybrid retrieval
 
+✓ Persistent ChromaDB retrieval state
+
+✓ Persistent BM25 retrieval state
+
+✓ Experiment-isolated retrieval state
+
 ✓ SQLite conversation persistence
 
-✓ Session restoration
+✓ Named multi-session runtime
 
-✓ Evaluation harness operational
+✓ Interactive CLI
 
-✓ Baseline metrics recorded
+✓ Session restoration and management
 
----
+✓ Ingestion and query execution separated into independent lifecycles
 
-## Planned Branches
+✓ Persistent retrieval state survives application restart
 
-### feature/phase1-ingestion
+✓ Application telemetry is centralized under one observability project
 
-Build baseline ingestion.
+✓ Traces can be identified by phase and experiment
 
----
-
-### feature/phase1-vector-store
-
-Implement Chroma integration.
-
----
-
-### feature/phase1-bm25
-
-Implement lexical retrieval.
-
----
-
-### feature/phase1-rag-engine
-
-Connect retrieval pipeline.
-
----
-
-### feature/phase1-session-memory
-
-SQLite logging.
-
-Conversation restoration.
-
----
-
-### feature/phase1-evaluation
-
-Smoke tests.
-
-20-question baseline.
+- Evaluation harness operational
+- Baseline metrics recorded
 
 ---
 
 ### Exit Criteria
 
-Phase 1 is complete when every architectural pillar has one working implementation.
+Phase 1 is complete when every architectural pillar has one working implementation and the baseline system can be evaluated independently of ingestion.
+
+Phase 1 must provide:
+
+- working ingestion
+- persistent retrieval state
+- vector and lexical retrieval
+- SQLite conversation persistence
+- interactive multi-session runtime
+- experiment-isolated retrieval state
+- stable runtime interfaces
+- baseline evaluation
 
 Optimization is intentionally postponed.
 
 ---
 
 # Phase 2 — Retrieval Quality
+
+**Status: Planned**
 
 ## Objective
 
@@ -286,14 +364,16 @@ No agentic reasoning should be introduced.
 
 ## Success Criteria
 
-Retrieval quality measurably improves.
+Retrieval improvements are evaluated against the Phase 1 baseline.
 
-Evaluation demonstrates:
+Changes must demonstrate measurable impact on relevant retrieval metrics without unacceptable regression in other tracked metrics.
 
-- higher precision
-- higher recall
+Evaluation includes:
 
-No caller changes required.
+- Context Precision
+- Context Recall
+- Faithfulness
+- Latency
 
 ---
 
@@ -321,21 +401,19 @@ feature/phase2-regression-evaluation
 
 ## Exit Criteria
 
-Hybrid retrieval is modular.
-
-Retrieval quality improves measurably.
-
-Conversation context becomes semantic.
+- Hybrid retrieval is modular.
+- Retrieval quality improves measurably.
+- Conversation context becomes semantic.
 
 ---
 
 # Phase 3 — Governance & Agentic State
 
+**Status: Planned**
+
 ## Objective
 
-Transform retrieval into an intelligent agent.
-
-Introduce long-term user memory.
+Introduce governed query routing, corrective retrieval workflows, access control, and long-term user memory.
 
 ---
 
@@ -343,11 +421,9 @@ Introduce long-term user memory.
 
 ### Scope
 
-Metadata filtering.
-
-Access control.
-
-Allowed-user filtering.
+- Metadata filtering.
+- Access control.
+- Allowed-user filtering.
 
 ---
 
@@ -355,17 +431,11 @@ Allowed-user filtering.
 
 ### Scope
 
-Intent router.
-
-Query routing.
-
-Hybrid retrieval.
-
-LLM-as-a-Judge.
-
-Query rewriting.
-
-Finite-state corrective loop.
+- Intent router.
+- Query routing.
+- Query rewriting.
+- Answer validation.
+- Finite-state corrective loop.
 
 ---
 
@@ -373,15 +443,11 @@ Finite-state corrective loop.
 
 ### Scope
 
-ProfileFact extraction.
-
-Read-Verify-Invalidate pipeline.
-
-Fact invalidation.
-
-Long-term memory.
-
-Versioned profile facts.
+- ProfileFact extraction.
+- Read-Verify-Invalidate pipeline.
+- Fact invalidation.
+- Long-term memory.
+- Versioned profile facts.
 
 ---
 
@@ -389,21 +455,19 @@ Versioned profile facts.
 
 ### Scope
 
-Evaluation of routing strategies.
-
-Hallucination reduction.
-
-Faithfulness tracking.
+- Evaluation of routing strategies.
+- LLM-as-a-Judge evaluation.
+- Faithfulness tracking.
 
 ---
 
 ## Success Criteria
 
-Intent routing operational.
-
-Fact mutation operational.
-
-Hallucination correction operational.
+- Intent routing is operational and evaluated against a defined routing dataset.
+- Long-term profile facts can be created, updated, invalidated, and versioned.
+- Corrective retrieval can detect and respond to defined validation failures.
+- Access-control filtering is enforced before protected context reaches generation.
+- Phase 3 changes are evaluated against the established baseline.
 
 ---
 
@@ -427,11 +491,19 @@ feature/phase3-judge
 
 ## Exit Criteria
 
-The application behaves as a deterministic agent rather than a retrieval script.
+The application supports bounded, governed agent execution with:
+
+- intent-based routing
+- corrective retrieval
+- access-control filtering
+- long-term memory
+- evaluation of agent behavior
 
 ---
 
 # Phase 4 — Production Readiness
+
+**Status: Planned**
 
 ## Objective
 
@@ -449,49 +521,37 @@ Only optimization.
 
 ## Pillar 2
 
-Advanced retrieval experiments.
-
-Hierarchical retrieval.
-
-Graph retrieval.
-
-Parallel retrieval.
+- Advanced retrieval experiments.
+- Hierarchical retrieval.
+- Graph retrieval.
+- Parallel retrieval.
 
 ---
 
 ## Pillar 3
 
-Redis semantic cache.
-
-Synchronization improvements.
-
-Distributed caching.
+- Redis semantic cache.
+- Synchronization improvements.
+- Distributed caching.
 
 ---
 
 ## Pillar 4
 
-Production benchmarking.
-
-Regression dashboards.
-
-Cost analysis.
-
-Latency analysis.
-
-Adaptive retries.
+- Production benchmarking.
+- Regression dashboards.
+- Cost analysis.
+- Latency analysis.
+- Adaptive retries.
 
 ---
 
 ## Success Criteria
 
-Cache operational.
-
-Parallel retrieval operational.
-
-Production benchmarking completed.
-
-Portfolio-ready evaluation dashboards.
+- Cache operational.
+- Parallel retrieval operational.
+- Production benchmarking completed.
+- Portfolio-ready evaluation dashboards.
 
 ---
 
@@ -516,57 +576,47 @@ feature/phase4-latency-analysis
 The system demonstrates:
 
 - production architecture
-
 - measurable optimization
-
 - operational observability
-
 - reproducible benchmarking
 
 ---
 
 # Dependency Summary
 
-Phase 2 depends on:
+### Phase 2 depends on
 
-✓ Working Phase 1 pipeline
+- Phase 1 ingestion and retrieval pipeline
+- persistent retrieval state
+- baseline evaluation
+
+### Phase 3 depends on
+
+- modular retrieval
+- retrieval fusion and reranking
+- semantic conversation retrieval
+- established evaluation workflow
+
+### Phase 4 depends on
+
+- stable agentic pipeline
+- evaluation framework
+- telemetry and benchmarking
 
 ---
 
-Phase 3 depends on:
+## Definition of Done
 
-✓ Modular retrieval
-
-✓ Semantic memory
-
----
-
-Phase 4 depends on:
-
-✓ Stable agent pipeline
-
-✓ Evaluation framework
-
----
-
-# Definition of Done
-
-A feature is complete only when all of the following are true.
+A feature is complete only when all applicable items are true:
 
 - Implementation complete
-
 - Tests pass
-
-- Evaluation completed (if applicable)
-
+- Evaluation completed, if applicable
 - Documentation updated
-
 - Dependency graph updated
-
-- Architectural decisions updated (if required)
-
+- Architectural decisions updated, if required
 - Current state updated
-
+- No known documentation inconsistencies remain
 - Branch merged
 
 Only then should work begin on the next feature.

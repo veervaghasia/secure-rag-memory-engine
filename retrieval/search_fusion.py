@@ -4,11 +4,11 @@ retrieval/search_fusion.py
 Implements result parsing and fusion logic across retrievers.
 """
 
-from opik import track, opik_context
 from config import config
 
 from typing import Any, Dict, List
 from ingestion.structures import ProcessedChunk
+from telemetry import track, update_current_span
 
 def parse_retrieval_results_to_chunks(results: Dict[str, Any]) -> List[ProcessedChunk]:
     """
@@ -39,7 +39,7 @@ def parse_retrieval_results_to_chunks(results: Dict[str, Any]) -> List[Processed
 
     return chunks
 
-@track(project_name=config.telemetry.project_name)
+@track(name="fuse_results")
 def fuse_results(
         vector_results: Dict[str, Any],
         bm25_results: Dict[str, Any],
@@ -49,6 +49,15 @@ def fuse_results(
     Fuses results from vector and BM25 retrievers.
     Phase 1: Concatenates top hits and deduplicates by chunk_id.
     """
+    # Attach high-level metadata to the root trace
+    update_current_span(
+        {
+            "fusion_method": config.retrieval.fusion_strategy,
+            "vector_result_count": len(vector_results),
+            "bm25_result_count": len(bm25_results),
+        }
+    )
+    
     vector_chunks = parse_retrieval_results_to_chunks(vector_results)
     bm25_chunks = parse_retrieval_results_to_chunks(bm25_results)
 

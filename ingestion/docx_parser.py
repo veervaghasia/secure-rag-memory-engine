@@ -11,19 +11,11 @@ import os
 import re
 import json
 import hashlib 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from docx import Document
-import opik
-from opik import opik_context
-
-from ingestion.structures import RawOnenotePage
-
-# Remove these after testing
 from config import config
-from dotenv import load_dotenv
-
-load_dotenv()
-
+from ingestion.structures import RawOnenotePage
+from telemetry import track, update_current_span
 
 class SecureDocxParser:
     """
@@ -32,9 +24,9 @@ class SecureDocxParser:
     providing stateful caching via local manifest records for fault-tolerant executions.
     """
     
-    def __init__(self, manifest_path: str = "data/ingestion_manifest.json"):
+    def __init__(self, manifest_path: Optional[str] = None):
         # Compiled regular expressions for rapid, automated secret matching
-        self.manifest_path = manifest_path
+        self.manifest_path = manifest_path or config.experiment.manifest_path
         self.secret_patterns = [
             re.compile(r"sk-[a-zA-Z0-9]{48}"),                  # OpenAI standard API Keys
             re.compile(r"AIzaSy[a-zA-Z0-9_\-]{33}"),             # Google Gemini API Keys
@@ -71,8 +63,7 @@ class SecureDocxParser:
         else:
             print("ℹ️ No manifest file exists on disk to reset.")
             return True
-        
-    
+            
     def _save_manifest(self):
         """Persists the updated operational status cache back onto local disk storage."""
         os.makedirs(os.path.dirname(self.manifest_path), exist_ok=True)
@@ -90,13 +81,12 @@ class SecureDocxParser:
         """Genereates a secure, deterministic SHA-256 hex digit for IDs and content tracking."""
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-    
-    @opik.track()
+    @track(name="parse_section_into_pages", capture_output=False)
     def parse_section_into_pages(self, file_path: str, notebook_name: str, section_name: str) -> List[RawOnenotePage]:
         """
         Reads a single .docx section file, detects genuine page segments by validating OneNote's native timestamp signatures, 
         ignores false-positive formatting, scrubs secrets, and tracks state changes using SHA-256 page hashes.
-        """
+        """      
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Target document not found: {file_path}")
         
@@ -155,7 +145,7 @@ class SecureDocxParser:
                 current_page_lines.append(sanitized_line)
                 i += 1
 
-        # Flush any trailing lines into the ifnal page slot
+        # Flush any trailing lines into the final page slot
         if current_page_lines:
             page_content = "\n".join(current_page_lines)
             page_id = self._generate_deterministic_hash(f"{file_path}_{page_index}")
@@ -171,22 +161,23 @@ class SecureDocxParser:
                 depth=0
             ))
 
-        # Log metrics to our Opik dashboard telemetry span
-        opik_context.update_current_trace(
-            metadata={
-                "file_name": os.path.basename(file_path),
-                "total_pages_extracted": len(pages),
+        # Attach high-level metadata to the root trace
+        update_current_span(
+            {
+                "notebook_name": notebook_name,
+                "section_name": section_name,
+                "total_pages_detected": len(pages),
             }
         )
 
         return pages
-    
-    @opik.track(project_name="secure-rag-memory-engine")
+
+    @track(name="scan_directory", capture_output=False)
     def scan_directory(self, root_dir: str) -> List[RawOnenotePage]:
         """
         Recursively walks directories, checking local modification files against
         cached manifest records to enable stateful resume and robust fault containment.
-        """
+        """        
         all_parsed_pages = []
 
         if not os.path.exists(root_dir):
@@ -240,5 +231,12 @@ class SecureDocxParser:
                     except Exception as e:
                        # Fault containment: failure to read a file notes down the error but preserves runtime
                        print(f"❌ Fault Containment Triggered! Failed to process {file}: {str(e)}")
-                             
+
+        # Attach high-level metadata to the root trace
+        update_current_span(
+            {
+                "total_pages_parsed": len(all_parsed_pages),
+            }
+        )
+                    
         return all_parsed_pages

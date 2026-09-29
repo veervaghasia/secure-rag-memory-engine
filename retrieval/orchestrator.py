@@ -3,18 +3,11 @@ retrieval/orchestrator.py
 
 Coordinates hybrid retrieval (Vector + BM25), context assembly, 
 and LiteLLM generation for Phase 1.
-
-TODO:
-- Add conversation memory management for multi-turn interactions.
 """
-
-from opik import track, opik_context
-from opik.opik_context import get_current_span_data
 
 from typing import Any, Dict, List, Optional
 import litellm
 from litellm import completion
-from litellm.integrations.opik.opik import OpikLogger
 
 from config import config
 from ingestion.structures import ProcessedChunk
@@ -23,9 +16,7 @@ from memory.structures import ChatMessage
 from retrieval.bm25_engine import BM25Engine
 from retrieval.search_fusion import fuse_results 
 from retrieval.vector_store import ChromaVectorEngine
-
-opik_logger = OpikLogger()
-litellm.callbacks = [opik_logger]
+from telemetry import track, get_litellm_metadata, update_current_trace, update_current_span
 
 def format_chunk_for_context(chunk: ProcessedChunk) -> str:
     """
@@ -37,7 +28,7 @@ def format_chunk_for_context(chunk: ProcessedChunk) -> str:
         f"{chunk.text_content}"
     )
 
-@track(project_name="secure-rag-memory-engine")
+@track(name="build_prompt_messages")
 def build_prompt_messages(
         user_query: str,
         retrieved_chunks: List[ProcessedChunk],
@@ -48,6 +39,14 @@ def build_prompt_messages(
     Assembles standard OpenAI/LiteLLM role-based message list
     including system prompt, conversation history, and active RAG query context.
     """
+    # Attach high-level metadata to the root trace
+    update_current_span(
+        {
+            "retrieved_chunk_count": len(retrieved_chunks),
+            "history_message_count": len(conversation_history) if conversation_history else 0,
+        }
+    )
+
     if system_prompt is None:
        system_prompt = (
             "You are a secure, accurate AI research assistant answering questions based on the user's notes. "
@@ -76,17 +75,17 @@ def build_prompt_messages(
 
     return messages
 
-@track(project_name="secure-rag-memory-engine")
+@track(name="run_rag_pipeline")
 def run_rag_pipeline(
         user_query: str,
         vector_engine: ChromaVectorEngine,
         bm25_engine: BM25Engine,
         state_manager: Optional[StateManager] = None,
-        session_id: str = config.memory.default_session_id,
+        session_id: Optional[str] = None,
         user_id: str = "default_user",
         filter_dict: Optional[Dict[str, Any]] = None,
-        top_k: int = config.retrieval.top_k,
-        model: str = config.llm.model_name
+        top_k: Optional[int] = None,
+        model: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Executes the Phase 1 User Query Lifecycle with Memory Persistence:
@@ -99,22 +98,30 @@ def run_rag_pipeline(
     7. Save User Query and Assistant Response to SQLite (if state_manager is provided)
     8. Return Structured Output (response + citation metadata)
     """
+    top_k = top_k or config.retrieval.top_k
+    model = model or config.llm.model_name
+    session_id = session_id or config.memory.default_session_id
+
     # Default StateManager fallback if not explicitly injected
     if state_manager is None:
         state_manager = StateManager()
 
     # Attach high-level metadata to the root trace
-    if config.telemetry.enable_opik:
-        opik_context.update_current_trace(
-            metadata={
-                "phase": config.telemetry.current_phase,
-                "session_id": session_id,
-                "user_id": user_id,
-                "user_query": user_query,
-                "top_k": top_k,
-                "has_filter": filter_dict is not None
-            }
-        )
+    update_current_trace(
+        metadata={
+            "pipeline": "run_rag_pipeline",
+            "session_id": session_id,
+            "user_id": user_id,
+            "user_query": user_query,
+            "user_query_length": len(user_query),
+            "top_k": top_k,
+            "has_filter": filter_dict is not None,
+            "vector_retrieval": config.retrieval.use_vector,
+            "bm25_retrieval": config.retrieval.use_bm25,
+            "fusion_method": config.retrieval.fusion_strategy,
+            "llm_model": config.llm.model_name,
+        }
+    )
 
     # 1. Fetch Conversation History (last k turns)
     conversation_history = state_manager.get_conversation_context(
@@ -151,18 +158,19 @@ def run_rag_pipeline(
     )
 
     # 6. Invoke LLM Generation via LiteLLM
-    llm_response = completion(
-        model=model,
-        messages=messages,
-        temperature=config.llm.temperature,  # Deterministic factual extraction
-        metadata={
-            "opik": {
-                "current_span_data": get_current_span_data()  # <--- THIS LINKS IT TO THE PARENT SPAN
-            }
-        }
+    llm_kwargs = {
+        "model": config.llm.model_name,
+        "messages": messages,
+        "temperature": config.llm.temperature,
+    }
+
+    llm_kwargs.update(
+        get_litellm_metadata()
     )
 
-    assistant_reply = llm_response.choices[0].message.content
+    response = litellm.completion(**llm_kwargs)
+
+    assistant_reply = response.choices[0].message.content
 
     # 7. Persist Both Turns to Memory Storage (User Query + Assistant Reply)
     user_msg = ChatMessage(

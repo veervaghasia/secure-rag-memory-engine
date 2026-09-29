@@ -7,164 +7,254 @@ Test harness verifying Pillar 3 (State & Memory Engine)
 """
 
 import os
-from dotenv import load_dotenv
+import sqlite3
+import pytest
 
-# Load environment variables before initializing internal config modules
-load_dotenv()
+
+from dotenv import load_dotenv
+from datetime import datetime, timezone
+from unittest.mock import patch, MagicMock
 
 import opik
 from config import config
-from ingestion.base_parser import FixedSizeChunker
-from ingestion.structures import RawOnenotePage
 from memory.state_manager import StateManager
 from memory.structures import ChatMessage
-from retrieval.bm25_engine import BM25Engine
-from retrieval.orchestrator import run_rag_pipeline
-from retrieval.vector_store import ChromaVectorEngine
 
 
-def test_state_manager_unit():
-    print("\n" + "=" * 60)
-    print("TEST 1: StateManager Persistence & Retrieval Unit Test")
-    print("=" * 60)
+# --- FIXTURES ---
 
-    test_db = "data/test_conversations.db"
-    test_session = "test_unit_session"
-    state_mgr = StateManager(db_path=test_db)
+@pytest.fixture
+def state_mgr(tmp_path):
+    """
+    Provides a fresh, isolated StateManager instance pointing to 
+    a temporary SQLite database created inside pytest's tmp_path.
+    """
+    test_db_path = str(tmp_path / "test_memory.db")
+    mgr = StateManager(db_path=test_db_path)
+    return mgr
 
-    # Clean previous run state
-    state_mgr.clear_session(test_session)
-    assert len(state_mgr.get_conversation_context(session_id=test_session)) == 0
 
-    # 1. Save User and Assistant Messages
-    msg1 = ChatMessage(
-        role="user", 
-        content="Hello, I am testing memory.", 
-        session_id=test_session
-    )
-    msg2 = ChatMessage(
-        role="assistant", 
-        content="Hello! Memory test acknowledged.", 
-        session_id=test_session
-    )
-
-    state_mgr.save_message(msg1)
-    state_mgr.save_message(msg2)
-
-    # 2. Retrieve History
-    history = state_mgr.get_conversation_context(session_id=test_session)
-
-    assert len(history) == 2, f"Expected 2 messages, got {len(history)}"
-    assert history[0]["role"] == "user"
-    assert history[0]["content"] == "Hello, I am testing memory."
-    assert history[1]["role"] == "assistant"
-    assert history[1]["content"] == "Hello! Memory test acknowledged."
-
-    print("✅ Message insertion and chronological retrieval verified.")
-
-    # 3. Test Session Cleanup
-    state_mgr.clear_session(test_session)
-    history_after_clear = state_mgr.get_conversation_context(session_id=test_session)
-    assert len(history_after_clear) == 0, f"Session should be empty after clear_session(); has {len(history_after_clear)} messages remaining."
-
-    # Cleanup temporary DB file
-    if os.path.exists(test_db):
-        os.remove(test_db)
-
-    print("✅ Session cleanup verified.")
-
-@opik.track(project_name=config.telemetry.project_name)
-def test_multi_turn_rag_pipeline():
-    print("\n" + "=" * 60)
-    print("TEST 2: Multi-Turn End-to-End RAG Pipeline Memory Test")
-    print("=" * 60)
-
-    # 1. Setup Mock Knowledge Base Data
-    mock_page = RawOnenotePage(
-        page_id="arch-notes-01",
-        notebook_name="Engineering",
-        section_name="Architecture",
-        page_title="RAG_Specs",
-        text_content="The Secure RAG Engine uses ChromaDB for dense vector search and BM25 for lexical search.",
-        depth=0,
-        page_hash="mock_hash_memory_test"
-    )
-
-    chunker = FixedSizeChunker(
-        chunk_size=config.chunking.chunk_size,
-        chunk_overlap=config.chunking.chunk_overlap
-    )
-
-    payload = chunker.chunk_page(mock_page)
-
-    vector_engine = ChromaVectorEngine()
-    bm25_engine = BM25Engine()
-    vector_engine.upsert_chunks(payload.chunks)
-    bm25_engine.upsert_chunks(payload.chunks)
-
-    # Initialize StateManager for Pipeline Test
-    state_mgr = StateManager(db_path="data/test_pipeline_memory.db")
-    test_session = "multi_turn_integration_session"
-    state_mgr.clear_session(test_session)
-
-    # TURN 1: State Establishment
-    turn_1_query = "Hi, my favorite research topic is Dense Retrieval."
-    print(f"\n[TURN 1 QUERY]: {turn_1_query}")
-
-    res_1 = run_rag_pipeline(
-        user_query=turn_1_query,
-        vector_engine=vector_engine,
-        bm25_engine=bm25_engine,
-        state_manager=state_mgr,
-        session_id=test_session
-    )
-    print(f"[TURN 1 ASSISTANT]: {res_1['content']}")
-
-    # Verify Turn 1 Persistence (2 rows: User + Assistant)
-    saved_history = state_mgr.get_conversation_context(session_id=test_session)
-    assert len(saved_history) == 2, f"Expected 2 messages after Turn 1, got {len(saved_history)}"
-
-    # TURN 2: Contextual Follow-up Query (Relies on Turn 1 History)
-    turn_2_query = "What did I say my favorite research topic was?"
-    print(f"\n[TURN 2 QUERY]: {turn_2_query}")
-
-    res_2 = run_rag_pipeline(
-        user_query=turn_2_query,
-        vector_engine=vector_engine,
-        bm25_engine=bm25_engine,
-        state_manager=state_mgr,
-        session_id=test_session
-    )
-    print(f"[TURN 2 ASSISTANT]: {res_2['content']}")
-
-    # Assertions
-    assert "Dense Retrieval" in res_2["content"] or "dense retrieval" in res_2["content"].lower(), \
-        "Assistant failed to recall state from Turn 1 history!"
-
-    # Final History Verification (4 rows total)
-    final_history = state_mgr.get_conversation_context(session_id=test_session)
-    assert len(final_history) == 4, f"Expected 4 messages after both turns, got {len(final_history)}"
-
-    # Cleanup
-    state_mgr.clear_session(test_session)
-
-    if os.path.exists("data/test_pipeline_memory.db"):
-        os.remove("data/test_pipeline_memory.db")
-
-    print("\n" + "=" * 60)
-    print("🎉 MULTI-TURN MEMORY INTEGRATION TEST PASSED SUCCESSFULLY!")
-    print("=" * 60)
-
-if __name__ == "__main__":
-    try:
-        opik.configure(
-            api_key=os.getenv("OPIK_API_KEY"),
-            workspace=os.getenv("OPIK_WORKSPACE"),
-            force=False,
-            automatic_approvals=True
+@pytest.fixture
+def sample_messages():
+    """Provides standard ChatMessage DTO instances for history testing."""
+    return [
+        ChatMessage(
+            role="user",
+            content="Hello, I am testing memory context.",
+            session_id="dummy_session_id",
+            user_id="user_1"
+        ),
+        ChatMessage(
+            role="assistant",
+            content="Hello! State persistence confirmed.",
+            session_id="dummy_session_id",
+            user_id="assistant"
+        ),
+        ChatMessage(
+            role="user",
+            content="Can you summarize our previous turn?",
+            session_id="dummy_session_id",
+            user_id="user_1"
         )
-    except Exception as e:
-        print(f"⚠️ [Telemetry Warning] Could not connect to Opik cloud: {e}. Continuing without tracing.")
+    ]
 
-    test_state_manager_unit()
-    test_multi_turn_rag_pipeline()
+
+# --- UNIT TESTS: STATE MANAGER ---
+
+class TestStateManagerSessions:
+
+    def test_init_db_creates_default_session(self, state_mgr):
+        """Verify _init_db automatically creates default_session_id in database."""
+        sessions = state_mgr.list_sessions()
+        assert len(sessions) == 1
+        assert sessions[0]["session_id"] == config.memory.default_session_id
+        assert sessions[0]["session_name"] == "Default Session"
+
+    def test_get_or_create_session_new_and_existing(self, state_mgr):
+        """Verify get_or_create_session creates a new session ID and reuses it on subsequent calls."""
+        session_name = "Architecture Discussions"
+
+        # First call: Should create a new UUID session entry
+        session_id_1 = state_mgr.get_or_create_session(session_name)
+        assert isinstance(session_id_1, str)
+        assert len(session_id_1) > 0
+
+        # Second call: Should lookup and return the exact same session_id
+        session_id_2 = state_mgr.get_or_create_session(session_name)
+        assert session_id_1 == session_id_2
+
+        # Verify list_sessions reflects default session + new session
+        all_sessions = state_mgr.list_sessions()
+        assert len(all_sessions) == 2
+
+    def test_rename_session_success(self, state_mgr):
+        """Verify renaming an existing session updates session_name correctly."""
+        old_name = "Initial Session Name"
+        new_name = "Refactored Session Name"
+
+        session_id = state_mgr.get_or_create_session(old_name)
+        success = state_mgr.rename_session(old_name, new_name)
+
+        assert success is True
+        # Lookup using new name should resolve to original session_id
+        assert state_mgr._get_session_id_by_name(new_name) == session_id
+        # Lookup using old name should yield None
+        assert state_mgr._get_session_id_by_name(old_name) is None
+
+    def test_rename_session_non_existent_and_collision(self, state_mgr):
+        """Verify rename_session returns False when old name missing or target name exists."""
+        state_mgr.get_or_create_session("Session Alpha")
+        state_mgr.get_or_create_session("Session Beta")
+
+        # Case 1: Non-existent old name
+        assert state_mgr.rename_session("NonExistent", "New Name") is False
+
+        # Case 2: Target name collision
+        assert state_mgr.rename_session("Session Alpha", "Session Beta") is False
+
+
+class TestStateManagerMessages:
+
+    def test_save_and_retrieve_conversation_context(self, state_mgr, sample_messages):
+        """Verify message persistence, chronological retrieval order, and content matching."""
+        session_id = state_mgr.get_or_create_session("Chat Thread 1")
+
+        for msg in sample_messages:
+            msg.session_id = session_id
+            state_mgr.save_message(msg)
+
+        context = state_mgr.get_conversation_context(session_id=session_id)
+
+        assert len(context) == 3
+        # Assert chronological ordering (User turn 1 -> Assistant turn 1 -> User turn 2)
+        assert context[0] == {"role": "user", "content": "Hello, I am testing memory context."}
+        assert context[1] == {"role": "assistant", "content": "Hello! State persistence confirmed."}
+        assert context[2] == {"role": "user", "content": "Can you summarize our previous turn?"}
+
+    def test_get_conversation_context_limit(self, state_mgr, sample_messages):
+        """Verify limit parameter restricts output to N most recent messages in chronological order."""
+        session_id = state_mgr.get_or_create_session("Limit Test Thread")
+
+        for msg in sample_messages:
+            msg.session_id = session_id
+            state_mgr.save_message(msg)
+
+        # Retrieve last 2 messages
+        limited_context = state_mgr.get_conversation_context(session_id=session_id, limit=2)
+
+        assert len(limited_context) == 2
+        # Should return the 2 latest turns ordered chronologically
+        assert limited_context[0]["content"] == "Hello! State persistence confirmed."
+        assert limited_context[1]["content"] == "Can you summarize our previous turn?"
+
+    def test_get_full_history_by_name(self, state_mgr, sample_messages):
+        """Verify get_full_history_by_name returns formatted dictionaries with timestamps."""
+        session_name = "Detailed History Thread"
+        session_id = state_mgr.get_or_create_session(session_name)
+
+        for msg in sample_messages:
+            msg.session_id = session_id
+            state_mgr.save_message(msg)
+
+        full_history = state_mgr.get_full_history_by_name(session_name)
+
+        assert full_history is not None
+        assert len(full_history) == 3
+        assert "timestamp" in full_history[0]
+        assert full_history[0]["role"] == "user"
+
+        # Non-existent session name should return None
+        assert state_mgr.get_full_history_by_name("Missing Session") is None
+
+
+class TestStateManagerDeletion:
+
+    def test_clear_session_history_by_name(self, state_mgr, sample_messages):
+        """Verify clearing history wipes messages but preserves session metadata row."""
+        session_name = "Clear History Thread"
+        session_id = state_mgr.get_or_create_session(session_name)
+
+        for msg in sample_messages:
+            msg.session_id = session_id
+            state_mgr.save_message(msg)
+
+        # Confirm messages present
+        assert len(state_mgr.get_conversation_context(session_id)) == 3
+
+        # Clear message history
+        cleared = state_mgr.clear_session_history_by_name(session_name)
+        assert cleared is True
+
+        # Messages should be empty, but session row should still exist
+        assert len(state_mgr.get_conversation_context(session_id)) == 0
+        assert state_mgr._get_session_id_by_name(session_name) == session_id
+
+    def test_delete_session_by_name(self, state_mgr, sample_messages):
+        """Verify delete_session_by_name purges both messages and session metadata."""
+        session_name = "Purge Thread"
+        session_id = state_mgr.get_or_create_session(session_name)
+
+        for msg in sample_messages:
+            msg.session_id = session_id
+            state_mgr.save_message(msg)
+
+        # Delete session completely
+        deleted = state_mgr.delete_session_by_name(session_name)
+        assert deleted is True
+
+        # Session metadata and history should both be removed
+        assert state_mgr._get_session_id_by_name(session_name) is None
+        assert len(state_mgr.get_conversation_context(session_id)) == 0
+
+    def test_delete_and_clear_non_existent_session(self, state_mgr):
+        """Verify clear and delete operations return False gracefully for invalid names."""
+        assert state_mgr.clear_session_history_by_name("Ghost Session") is False
+        assert state_mgr.delete_session_by_name("Ghost Session") is False
+
+
+# --- INTEGRATION TEST: RAG PIPELINE CONVERSATION ---
+
+class TestMultiTurnMemoryIntegration:
+
+    @patch("retrieval.orchestrator.run_rag_pipeline")
+    def test_multi_turn_rag_pipeline_memory_flow(self, mock_pipeline, state_mgr):
+        """
+        Simulates end-to-end multi-turn dialog state progression using StateManager.
+        """
+        session_name = "Multi-Turn Pipeline Session"
+        session_id = state_mgr.get_or_create_session(session_name)
+
+        # Simulated Turn 1
+        turn1_user = ChatMessage(
+            role="user",
+            content="My favorite topic is Dense Retrieval.",
+            session_id=session_id
+        )
+        turn1_assistant = ChatMessage(
+            role="assistant",
+            content="Duly noted! I'll keep Dense Retrieval in mind.",
+            session_id=session_id
+        )
+        state_mgr.save_message(turn1_user)
+        state_mgr.save_message(turn1_assistant)
+
+        history_t1 = state_mgr.get_conversation_context(session_id=session_id)
+        assert len(history_t1) == 2
+
+        # Simulated Turn 2
+        turn2_user = ChatMessage(
+            role="user",
+            content="What did I say my favorite topic was?",
+            session_id=session_id
+        )
+        turn2_assistant = ChatMessage(
+            role="assistant",
+            content="You mentioned that your favorite topic is Dense Retrieval.",
+            session_id=session_id
+        )
+        state_mgr.save_message(turn2_user)
+        state_mgr.save_message(turn2_assistant)
+
+        history_t2 = state_mgr.get_conversation_context(session_id=session_id)
+        assert len(history_t2) == 4
+        assert "Dense Retrieval" in history_t2[3]["content"]

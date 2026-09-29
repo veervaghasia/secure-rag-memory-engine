@@ -1,31 +1,28 @@
 import hashlib  # to import cryptographic fns to calculate the hash of a chunk
 import time  # to track latency of the ingestion process
-from typing import List  
+from typing import List, Optional  
 from ingestion.structures import RawOnenotePage, ProcessedChunk, IngestionPayload
 from config import config
-from opik import opik_context, track
 
 class FixedSizeChunker:
     """Splits a given text into fixed-size chunks of a specified size."""
     
-    def __init__(self, chunk_size: int = None, chunk_overlap: int = None):
+    def __init__(self, chunk_size: Optional[int] = None, chunk_overlap: Optional[int] = None):
         """Initialize the chunker with specific execution parameters."""
         self.chunk_size = chunk_size or config.chunking.chunk_size
-        self.chunk_overlap = chunk_overlap or config.chunking.chunk_overlap
+        
+        if chunk_overlap is None:
+            self.chunk_overlap = config.chunking.chunk_overlap
+        else:
+            self.chunk_overlap = chunk_overlap
 
     def _generate_deterministic_hash(self, text: str) -> str:
         """Generates a stable SHA-256 hex string for deduplication."""
         # hashlib requires byte streams, so we encode the python string to utf-8 first
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
-    
-    @track(project_name="secure-rag-memory-engine")
+
     def chunk_page(self, page: RawOnenotePage) -> IngestionPayload:
-        """Slices a RawOnenotePage into fixed-character ProcessedChunks with metadata."""
-        # Update the current trace metadata cleanly using the context module
-        opik_context.update_current_trace(metadata={
-            "phase": config.telemetry.current_phase
-        })
-        
+        """Slices a RawOnenotePage into fixed-character ProcessedChunks with metadata."""        
         start_time = time.time()  # Start the stopwatch for telemetry
 
         text = page.text_content
@@ -53,12 +50,19 @@ class FixedSizeChunker:
             # Slice the target chunk string
             chunk_text = text[start_index:end_index]
 
-            # Generate the immutable SHA-256 ID
+            # Generate a determinisitc hash of the chunk content
             content_sha = self._generate_deterministic_hash(chunk_text)
 
-            # COnstruct our pydantic object wrapping database-level metadata
+            # Generate the deterministic ID for this chunk's location within the notebook hierarchy
+            chunk_identity = (
+                f"{page.page_id}:{chunk_sequence_counter}"
+            )
+            chunk_id = self._generate_deterministic_hash(chunk_identity)
+            
+
+            # Construct our pydantic object wrapping database-level metadata
             processed_chunk = ProcessedChunk(
-                chunk_id = content_sha,
+                chunk_id = chunk_id,
                 parent_page_id=page.page_id,
                 text_content=chunk_text,
                 chunk_index=chunk_sequence_counter,
